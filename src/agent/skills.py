@@ -655,15 +655,20 @@ available just because its name appears in documentation.
 
 ## Recommended workflow
 
-1. Read /capabilities and /services/{service_id}/shell.
-2. Read /services/{service_id}/tools.
+1. Read /context first; it combines Agent identity, enabled capabilities
+   and Skill links. Reuse its ETag and If-None-Match on later discovery calls.
+2. Read /services/{service_id}/tools only when platform-specific tools are needed.
 3. Call workspace.inspect before editing paths whose storage/permissions are
    unclear.
-4. Call runtime.detect when a framework CLI may or may not be installed.
+4. Call runtime.detect only when a framework CLI may or may not be installed.
 5. Prefer a first-class platform tool over a raw shell command when both can
    perform the same task.
-6. Use the interactive PTY for tools that explicitly report interactive
-   transport requirements.
+6. Use commands/batch for several non-interactive commands and the PTY WebSocket
+   command.batch message for a live, streamed sequence.
+7. Use MCP Streamable HTTP at /services/{service_id}/mcp when the client supports
+   MCP; tools are filtered by Agent scopes and service permissions still apply.
+8. Use the PTY WebSocket for interactive programs that require stdin, prompts
+   or a persistent terminal process.
 
 ## Storage and access
 
@@ -880,17 +885,40 @@ Use this skill whenever the task is fundamentally a file operation.
 
 - POST {{base}}/services/{service_id}/shell/files
 
-Supported actions are discovered from OpenAPI and currently include read, write,
+Supported actions on the compatibility file endpoint include read, write,
 create, create_folder, rename, delete and upload.
+
+## Batch-first workflow
+
+Prefer these Agent endpoints when working with multiple files:
+
+- GET {{base}}/services/{service_id}/workspace/tree?path=.&depth=3&limit=500
+- POST {{base}}/services/{service_id}/workspace/read-many
+- POST {{base}}/services/{service_id}/workspace/write-many
+- POST {{base}}/services/{service_id}/workspace/patch
+- POST {{base}}/services/{service_id}/workspace/search
+
+Read-many accepts up to 30 paths and returns SHA256 hashes. Write-many accepts
+up to 20 existing files, supports expected_sha256 preconditions and has a 2 MiB
+aggregate content limit. Patch requires the SHA256 from a prior read and uses
+exact find/replace contexts; dry_run is the default. To mutate, explicitly set
+dry_run=false and apply=true. A conflict means re-read the file and rebase the
+patch; never silently overwrite a newer file.
+
+Workspace search is bounded and searches only the authorized workspace. Tree
+listing is bounded by depth and page size. Use the shell token in the
+X-Shell-Token header; do not put it in URLs. For MCP clients, call
+`shell.session.create` first, pass the returned short-lived `shell_token` to
+workspace tools, and close the session with `shell.session.close` when done.
 
 ## Rules
 
 1. Check /capabilities for shell.files.read/write.
-2. Read the OpenAPI request schema before sending the operation.
+2. Read the OpenAPI request schema before sending an operation.
 3. Keep paths inside the authorized service workspace.
-4. Prefer the managed file API over shell pipelines.
-5. Use the API's writable/mount metadata as the authority for supported writes.
-6. Verify important writes by reading the target back.
+4. Prefer batch file APIs over one request per file and over shell pipelines.
+5. Use SHA256 preconditions for edits that depend on previously read content.
+6. Keep write batches small and verify important changes with a read-many call.
 
 The managed file operation may use backend-owned filesystem privileges that are
 different from the service process UID. Therefore a path that looks writable

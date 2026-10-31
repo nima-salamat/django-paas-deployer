@@ -30,6 +30,7 @@ The resource-oriented API covers services, plans, networks, volumes, deployments
 
 Machine-readable discovery is available from:
 
+- `GET /agent/v1/context` — combined identity, capability and Skill index with ETag/304 support; `?include=services` also includes the first paginated service list when authorized.
 - `GET /agent/v1/capabilities`
 - `GET /agent/v1/openapi.json`
 - `GET /agent/v1/agent.md`
@@ -47,6 +48,28 @@ The generated `AGENT.md` contains a temporary bootstrap credential only. The cre
 ## Logs
 
 Deployment lifecycle logs are `DeployLog` records and are queried through the existing deployment-log mechanism. Runtime application logs are `ServiceLogStream`/`ServiceLogEntry` records queried through `logs.query`. The Agent API keeps the two sources separate.
+
+## Agent integration and efficiency
+
+The Agent API exposes a stateless MCP Streamable HTTP adapter at
+`POST /agent/v1/services/{service_id}/mcp`. It reuses the same Agent scopes,
+service authorization, runtime tools and audit boundary as REST. Protocol
+revisions `2026-07-28` and `2025-11-25` are supported. No MCP SDK dependency or
+second authorization model is introduced.
+
+The Context endpoint combines identity, capabilities and Skill links and
+supports conditional ETag requests. OpenAPI and individual Skills remain
+available as on-demand detailed contracts.
+
+Workspace operations include bounded tree listing, multi-file reads and writes,
+workspace search, and exact-context patching with SHA256 preconditions and
+dry-run by default. The underlying managed file API remains the single
+filesystem safety boundary. Batch limits are deliberately bounded.
+
+Non-interactive command batches accept argv arrays and use the existing
+runtime command validator. The PTY/WebSocket transport supports a streamed
+command.batch message for sequential commands and interactive input. Shell
+command responses can use summary/full output modes and explicit byte limits.
 
 ## Shell
 

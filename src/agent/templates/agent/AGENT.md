@@ -52,11 +52,18 @@ Normal LLM/tool operation does not require enrollment.
 
 The platform contract is dynamic and must be discovered rather than guessed.
 
-Start with:
-- GET {{ api_base_url }}/auth/me
-- GET {{ api_base_url }}/capabilities
+Start with one request:
+- GET {{ api_base_url }}/context
+
+The context response combines Agent identity, enabled capabilities and Skill
+links. It returns an ETag; reuse it with If-None-Match so an unchanged context
+can return HTTP 304 without downloading it again. Add ?include=services when the first paginated service list is needed and
+the Agent has services.read; this shortens the initial discovery sequence. Fetch OpenAPI and an individual
+Skill only when the task needs their exact contract or procedure:
+
 - GET {{ api_base_url }}/openapi.json
 - GET {{ api_base_url }}/skills
+- GET {{ api_base_url }}/skills/{skill_name}
 
 Capabilities says what this Agent may do. OpenAPI is the exact
 machine-readable request/response contract. Skills lists the detailed
@@ -120,16 +127,67 @@ another lower-level interface.
 The shell is restricted to the authorized service runtime. It is not host
 shell access, Docker API access, or unrestricted host Bash.
 
-Interactive work uses the PTY/WebSocket transport when the runtime requires it.
-Command syntax, risk classification, workspace confinement, output limits, and
-session lifetime come from the live shell metadata and OpenAPI contract.
+For multiple non-interactive commands, prefer:
+- POST {{ api_base_url }}/services/{service_id}/commands/batch
+
+Send an array of argv arrays, not shell command strings. Each command is
+validated independently; destructive operations still require explicit
+confirmation. Set max_output_bytes to bound the combined response.
+
+For interactive work, use the existing PTY/WebSocket transport. It also supports
+a command.batch message with up to 10 commands. Output arrives as
+batch.started, batch.command.started, process.output, process.exit,
+batch.command.completed and batch.completed events. Do not start a second
+command while a batch is running.
+
+One-shot Shell commands accept output_mode=summary or full and a bounded
+max_output_bytes. Prefer summary when the complete stdout/stderr is not needed.
 
 ### Workspace files
 
-Treat service workspace files as resources. For create/read/update/rename/delete/
-upload operations, use the workspace file skill and its dedicated endpoint when
-available. Do not assume that Unix permissions of the application process are
-the same as the platform-managed file operation's effective capability.
+Treat service workspace files as resources. Prefer the batch endpoints to avoid
+one HTTP request per file:
+
+- GET {{ api_base_url }}/services/{service_id}/workspace/tree
+- POST {{ api_base_url }}/services/{service_id}/workspace/read-many
+- POST {{ api_base_url }}/services/{service_id}/workspace/write-many
+- POST {{ api_base_url }}/services/{service_id}/workspace/patch
+- POST {{ api_base_url }}/services/{service_id}/workspace/search
+
+Read-many returns SHA256 hashes. Use expected_sha256 for conditional writes.
+Patch is a dry-run by default; set dry_run=false and apply=true only after
+reviewing the returned diff. Re-read after important changes. Batch sizes and
+total bytes are bounded. Do not assume that Unix permissions of the application
+process are the same as the platform-managed file operation's effective
+capability.
+
+### MCP integration
+
+For clients that support the Model Context Protocol, use the service-scoped
+Streamable HTTP endpoint:
+{{ api_base_url }}/services/{service_id}/mcp
+
+Authenticate with the normal Authorization: Bearer credential and use HTTPS.
+The endpoint supports MCP protocol versions 2026-07-28 and 2025-11-25.
+For 2026-07-28, send MCP-Protocol-Version, Mcp-Method and (for tools/call)
+Mcp-Name headers, and mirror the protocol version in
+params._meta["io.modelcontextprotocol/protocolVersion"] plus an object-valued
+params._meta["io.modelcontextprotocol/clientCapabilities"]. Every successful
+2026-07-28 result includes resultType=complete. This revision is stateless and
+does not use initialize. The request Accept header must include application/json
+and text/event-stream. Use tools/list to discover
+the tools available to this Agent and service, then tools/call to invoke them.
+Do not assume a tool is enabled because another Agent or service can see it.
+
+For workspace tools, first call tools/call with shell.session.create to obtain
+a short-lived Shell token. Pass it as the shell_token argument to workspace.tree,
+workspace.read_many, workspace.search, workspace.write_many and workspace.patch.
+Close the session with shell.session.close when finished. Treat the returned
+token as secret material and never disclose it.
+
+MCP is an additional adapter over the same PassDeployer boundaries. It does not
+grant extra permissions or replace the resource-oriented REST API. Keep using
+REST when its explicit request/response contract is more convenient.
 
 ### Errors and recovery
 

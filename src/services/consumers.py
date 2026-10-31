@@ -1,6 +1,7 @@
 import asyncio
 import shlex
 import urllib.parse
+import uuid
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -210,6 +211,14 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
         self.exec_socket = None
         self.exec_task = None
         self.exec_id = None
+        self.batch_id = None
+        self.batch_queue = []
+        self.batch_index = 0
+        self.batch_total = 0
+        self.batch_failures = 0
+        self.batch_continue_on_error = True
+        self.current_batch_command = None
+        self.batch_immediate_exit_code = None
         await self.accept()
         await self.send_json({"type": "ready", "cwd": self.session.workdir, "platform": self.session.platform, "auth": "agent" if self.agent is not None else "user"})
 
@@ -265,7 +274,14 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                 return
             await self.send_json({"type": "pong"})
             return
+        if message_type == "command.batch":
+            await self._start_batch(content)
+            return
         if message_type == "command":
+            if self.batch_id is not None:
+                await self.send_json({"type": "error", "code": "BATCH_BUSY",
+                                      "message": "A command batch is running; wait for batch.completed."})
+                return
             await self._start_command(str(content.get("command") or ""), bool(content.get("confirm", False)))
             return
         if message_type == "stdin":
@@ -295,6 +311,70 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "resize.ack", "cols": cols, "rows": rows})
             return
         await self.send_json({"type": "error", "message": "Unsupported shell message."})
+
+    async def _start_batch(self, content):
+        if self.batch_id is not None or self.exec_socket is not None:
+            await self.send_json({"type": "error", "code": "BATCH_BUSY",
+                                  "message": "A command or batch is already running."})
+            return
+        commands = content.get("commands")
+        if not isinstance(commands, list) or not commands or len(commands) > 10:
+            await self.send_json({"type": "error", "code": "INVALID_BATCH",
+                                  "message": "commands must contain 1 to 10 entries."})
+            return
+        queue = []
+        for item in commands:
+            if isinstance(item, str):
+                command, confirm = item, False
+            elif isinstance(item, dict):
+                command, confirm = str(item.get("command") or ""), item.get("confirm") is True
+            else:
+                command, confirm = "", False
+            if not command.strip() or len(command) > 4096 or "\x00" in command or "\r" in command:
+                await self.send_json({"type": "error", "code": "INVALID_BATCH",
+                                      "message": "Each command must be a valid string shorter than 4096 characters."})
+                return
+            queue.append({"command": command, "confirm": confirm})
+        self.batch_id = str(content.get("batch_id") or uuid.uuid4())
+        self.batch_queue = queue
+        self.batch_total = len(queue)
+        self.batch_index = 0
+        self.batch_failures = 0
+        self.batch_continue_on_error = content.get("continue_on_error", True) is not False
+        await self.send_json({"type": "batch.started", "batch_id": self.batch_id,
+                              "total": self.batch_total, "continue_on_error": self.batch_continue_on_error})
+        await self._run_next_batch_command()
+
+    async def _run_next_batch_command(self):
+        if self.batch_id is None or self.exec_socket is not None:
+            return
+        if not self.batch_queue:
+            completed = self.batch_index
+            await self.send_json({"type": "batch.completed", "batch_id": self.batch_id,
+                                  "completed": completed, "total": self.batch_total,
+                                  "failed": self.batch_failures,
+                                  "skipped": max(0, self.batch_total - completed)})
+            self.batch_id = None
+            self.current_batch_command = None
+            return
+        item = self.batch_queue.pop(0)
+        index = self.batch_index
+        self.batch_index += 1
+        self.current_batch_command = {"index": index, "command": item["command"]}
+        self.batch_immediate_exit_code = None
+        await self.send_json({"type": "batch.command.started", "batch_id": self.batch_id,
+                              "index": index, "total": self.batch_total, "command": item["command"]})
+        await self._start_command(item["command"], item["confirm"])
+        if self.exec_task is None and self.exec_socket is None:
+            exit_code = self.batch_immediate_exit_code
+            if exit_code != 0:
+                self.batch_failures += 1
+            await self.send_json({"type": "batch.command.completed", "batch_id": self.batch_id,
+                                  "index": index, "exit_code": exit_code, "streamed": False})
+            self.current_batch_command = None
+            if exit_code != 0 and not self.batch_continue_on_error:
+                self.batch_queue = []
+            await self._run_next_batch_command()
 
     async def _start_command(self, command, confirm):
         from .shell import (
@@ -350,6 +430,8 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                     self.session.last_used_at = now
                     self.session.expires_at = await database_sync_to_async(_session_expiry)(now)
                     await database_sync_to_async(self.session.save)(update_fields=["workdir", "last_used_at", "expires_at"])
+                    if self.batch_id is not None:
+                        self.batch_immediate_exit_code = 0
                     await self.send_json({"type": "command.output", "stdout": f"{resolved}\n", "stderr": "", "exit_code": 0, "cwd": resolved})
                     return
 
@@ -428,6 +510,8 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
             if argv and argv[0] == "cd":
                 from services.shell import execute_command
                 result = await database_sync_to_async(execute_command)(self.session, command, confirm=confirm)
+                if self.batch_id is not None:
+                    self.batch_immediate_exit_code = result.get("exit_code")
                 await self.send_json({"type": "command.output", **result})
                 return
             loop = asyncio.get_running_loop()
@@ -493,7 +577,10 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
                 if not chunk:
                     break
                 text = bytes(chunk).decode("utf-8", "replace")
-                await self.send_json({"type": "process.output", "data": text})
+                event = {"type": "process.output", "data": text}
+                if self.batch_id is not None and self.current_batch_command:
+                    event.update({"batch_id": self.batch_id, "index": self.current_batch_command["index"]})
+                await self.send_json(event)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -508,6 +595,16 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
             self.exec_id = None
             self.exec_task = None
             await self.send_json({"type": "process.exit", "exit_code": exit_code})
+            if self.batch_id is not None and self.current_batch_command:
+                index = self.current_batch_command["index"]
+                if exit_code != 0:
+                    self.batch_failures += 1
+                await self.send_json({"type": "batch.command.completed", "batch_id": self.batch_id,
+                                      "index": index, "exit_code": exit_code, "streamed": True})
+                self.current_batch_command = None
+                if exit_code != 0 and not self.batch_continue_on_error:
+                    self.batch_queue = []
+                await self._run_next_batch_command()
 
     @staticmethod
     def _recv(sock, size):

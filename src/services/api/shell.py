@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError
 import io
+import hashlib
 import mimetypes
 import os
 import posixpath
@@ -899,7 +900,30 @@ def shell_file_apiview(request, service_id):
             managed_writable = bool(mount_rw)
             editor_writable = bool(mount_rw)
             reason = "" if editor_writable else "Read-only Docker mount"
-            return Response({"result":"success", "path":safe_path, "exit_code":int(result.exit_code or 0), "content":(out or b"")[:262144].decode("utf-8","replace"), "stderr":(err or b"")[:16384].decode("utf-8","replace"), "writable":editor_writable, "mode":access["mode"], "mount_writable":mount_rw, "effective_writable":user_writable, "managed_writable":managed_writable, "read_only_reason":reason})
+            content_bytes = bytes(out or b"")
+            try:
+                content_text = content_bytes[:262144].decode("utf-8", "strict")
+                content_utf8 = True
+            except UnicodeDecodeError:
+                content_text = content_bytes[:262144].decode("utf-8", "replace")
+                content_utf8 = False
+            return Response({
+                "result": "success",
+                "path": safe_path,
+                "exit_code": int(result.exit_code or 0),
+                "content": content_text,
+                "content_utf8": content_utf8,
+                "content_bytes": len(content_bytes),
+                "content_sha256": hashlib.sha256(content_bytes).hexdigest(),
+                "content_truncated": len(content_bytes) > 262144,
+                "stderr": (err or b"")[:16384].decode("utf-8", "replace"),
+                "writable": editor_writable,
+                "mode": access["mode"],
+                "mount_writable": mount_rw,
+                "effective_writable": user_writable,
+                "managed_writable": managed_writable,
+                "read_only_reason": reason,
+            })
         if action == "write":
             content = request.data.get("content")
             if not isinstance(content, str):

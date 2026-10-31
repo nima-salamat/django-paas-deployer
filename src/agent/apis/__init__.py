@@ -14,6 +14,9 @@ from .configuration import ConfigurationView, EnvironmentView, SecretsView, Endp
 from .shell import ShellInfoView, ShellSessionView, ShellCommandView, ShellCloseView, ShellReplaceView, ShellFileView
 from .skills import SkillIndexView, SkillDetailView
 from .runtime_tools import RuntimeToolIndexView, RuntimeToolExecuteView
+from .efficiency import (AgentContextView, WorkspaceTreeView, WorkspaceReadManyView,
+                         WorkspaceWriteManyView, WorkspacePatchView, WorkspaceSearchView,
+                         AgentCommandBatchView, AgentMCPView)
 
 __all__ = [
     name for name in (
@@ -26,5 +29,7 @@ __all__ = [
         "ConfigurationView", "EnvironmentView", "SecretsView", "EndpointConfigView", "NetworkAttachmentsView", "RevisionListView", "RevisionDetailView", "RevisionRollbackView", "DatabaseBindingsView",
         "ShellInfoView", "ShellSessionView", "ShellCommandView", "ShellCloseView", "ShellReplaceView", "ShellFileView", "SkillIndexView", "SkillDetailView", "RuntimeToolIndexView", "RuntimeToolExecuteView",
         "DeploymentHelpView", "DeploymentInspectView", "DatabaseCredentialsView",
+        "AgentContextView", "WorkspaceTreeView", "WorkspaceReadManyView", "WorkspaceWriteManyView",
+        "WorkspacePatchView", "WorkspaceSearchView", "AgentCommandBatchView", "AgentMCPView",
     )
 ]

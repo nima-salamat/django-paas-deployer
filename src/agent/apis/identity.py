@@ -100,6 +100,13 @@ class AgentCapabilitiesView(AgentSecuredAPIView):
                 "runtime": {"models":["ServiceLogStream","ServiceLogEntry"],"database_alias":"deployment_logs"},
             },
             "pagination": {"default_page_size": 25, "max_page_size": 100},
+            "agent_interfaces": {
+                "context": "/agent/v1/context",
+                "mcp": {"transport": "Streamable HTTP", "protocol_versions": ["2026-07-28", "2025-11-25"], "path": "/agent/v1/services/{service_id}/mcp"},
+                "workspace_batch": ["tree", "read-many", "write-many", "patch", "search"],
+                "command_batch": "/agent/v1/services/{service_id}/commands/batch",
+                "websocket_command_batch": True,
+            },
             "idempotency": {"header":"Idempotency-Key","ttl_hours":24,"important_mutations":True},
             "operations": [
                 {

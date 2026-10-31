@@ -322,6 +322,13 @@ def build_openapi(agent, *, request=None):
         },
         "/agent/v1/auth/me": {"get": {"summary": "Read Agent and credential metadata"}},
         "/agent/v1/capabilities": {"get": {"summary": "Discover enabled Agent capabilities"}},
+        "/agent/v1/context": {
+            "get": {
+                "summary": "Get identity, capabilities and Skill links in one conditional response",
+                "parameters": [_parameter("include", "query", {"type": "string", "description": "Comma-separated optional sections; services includes the first paginated service response."})],
+                "responses": {"200": {"description": "Combined Agent context"}, "304": {"description": "Context has not changed"}},
+            }
+        },
         "/agent/v1/agent.md": {"get": {"summary": "Generate Agent-specific AGENT.md with one-use enrollment credential"}},
         "/agent/v1/openapi.json": {"get": {"summary": "Get this OpenAPI document"}},
         "/agent/v1/services": {
@@ -460,9 +467,11 @@ def build_openapi(agent, *, request=None):
                                     "command": {"type": "string"},
                                     "confirm": {"type": "boolean", "default": False},
                                     "dry_run": {"type": "boolean", "default": False},
+                                    "output_mode": {"type": "string", "enum": ["full", "summary"], "default": "full"},
+                                    "max_output_bytes": {"type": "integer", "minimum": 1024, "maximum": 262144, "default": 65536},
                                 },
                             },
-                            "example": {"command": "python manage.py migrate", "confirm": False},
+                            "example": {"command": "python manage.py migrate", "confirm": False, "output_mode": "summary"},
                         }
                     },
                 },
@@ -483,7 +492,96 @@ def build_openapi(agent, *, request=None):
         "/agent/v1/services/{service_id}/shell/files": {
             "post": {"summary": "Use the existing restricted file operation boundary"}
         },
-        "/agent/v1/services/{service_id}/tools": {
+"/agent/v1/services/{service_id}/workspace/tree": {
+            "get": {
+                "summary": "List the restricted workspace tree with bounded depth and offset pagination",
+                "parameters": [
+                    _parameter("path", "query", {"type": "string"}),
+                    _parameter("depth", "query", {"type": "integer", "minimum": 1, "maximum": 8}),
+                    _parameter("limit", "query", {"type": "integer", "minimum": 1, "maximum": 1000}),
+                    _parameter("offset", "query", {"type": "integer", "minimum": 0}),
+                ],
+                "responses": {"200": {"description": "Workspace entries", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ObjectResult"}}}}},
+            }
+        },
+        "/agent/v1/services/{service_id}/workspace/read-many": {
+            "post": {
+                "summary": "Read up to 30 workspace files in one request",
+                "requestBody": _json_body({"type": "object", "required": ["paths"], "properties": {
+                    "paths": {"type": "array", "maxItems": 30, "items": {"type": "string"}},
+                    "max_total_bytes": {"type": "integer", "default": 1048576},
+                    "start_line": {"type": "integer"}, "end_line": {"type": "integer"},
+                    "shell_token": {"type": "string", "writeOnly": True}}}),
+            }
+        },
+        "/agent/v1/services/{service_id}/workspace/write-many": {
+            "post": {
+                "summary": "Write up to 20 files with optional SHA256 preconditions",
+                "parameters": [idempotency],
+                "requestBody": _json_body({"type": "object", "required": ["files"], "properties": {
+                    "files": {"type": "array", "maxItems": 20, "items": {"type": "object",
+                      "required": ["path", "content"], "properties": {"path": {"type": "string"},
+                      "content": {"type": "string"}, "expected_sha256": {"type": "string"}}}},
+                    "token": {"type": "string", "writeOnly": True}}}),
+            }
+        },
+        "/agent/v1/services/{service_id}/workspace/patch": {
+            "post": {
+                "summary": "Apply exact-context replacements after SHA256 validation; dry-run by default",
+                "parameters": [idempotency],
+                "requestBody": _json_body({"type": "object", "required": ["path", "expected_sha256", "changes"],
+                  "properties": {"path": {"type": "string"}, "expected_sha256": {"type": "string"},
+                    "changes": {"type": "array", "maxItems": 50, "items": {"type": "object",
+                      "required": ["find", "replace"], "properties": {"find": {"type": "string"},
+                      "replace": {"type": "string"}, "expected_count": {"type": "integer", "default": 1}}}},
+                    "dry_run": {"type": "boolean", "default": True}, "apply": {"type": "boolean", "default": False},
+                    "token": {"type": "string", "writeOnly": True}}}),
+            }
+        },
+        "/agent/v1/services/{service_id}/workspace/search": {
+            "post": {
+                "summary": "Search text in the restricted workspace with bounded results",
+                "requestBody": _json_body({"type": "object", "required": ["query"], "properties": {
+                    "query": {"type": "string", "maxLength": 512}, "path": {"type": "string"},
+                    "regex": {"type": "boolean"}, "max_results": {"type": "integer", "maximum": 500},
+                    "token": {"type": "string", "writeOnly": True}}}),
+            }
+        },
+        "/agent/v1/services/{service_id}/commands/batch": {
+            "post": {
+                "summary": "Execute up to 10 validated argv commands in one request",
+                "parameters": [idempotency],
+                "requestBody": _json_body({"type": "object", "required": ["commands"], "properties": {
+                    "commands": {"type": "array", "maxItems": 10, "items": {"type": "object",
+                      "required": ["argv"], "properties": {"argv": {"type": "array", "items": {"type": "string"}},
+                      "confirm": {"type": "boolean"}}}},
+                    "continue_on_error": {"type": "boolean", "default": True},
+                    "max_output_bytes": {"type": "integer", "default": 65536}}}),
+            }
+        },
+        "/agent/v1/services/{service_id}/mcp": {
+            "post": {
+                "summary": "Stateless MCP Streamable HTTP endpoint for service-scoped tools",
+                "parameters": [
+                    _parameter("MCP-Protocol-Version", "header", {"type": "string"}, required=True),
+                    _parameter("Mcp-Method", "header", {"type": "string"}, required=True),
+                    _parameter("Mcp-Name", "header", {"type": "string"}),
+                ],
+                "requestBody": _json_body({"type": "object", "required": ["jsonrpc", "method"],
+                  "properties": {"jsonrpc": {"type": "string", "enum": ["2.0"]},
+                    "id": {"oneOf": [{"type": "string"}, {"type": "integer"}]}, "method": {"type": "string"},
+                    "params": {"type": "object", "properties": {
+                      "_meta": {"type": "object", "properties": {
+                        "io.modelcontextprotocol/protocolVersion": {"type": "string", "enum": ["2026-07-28"]},
+                        "io.modelcontextprotocol/clientCapabilities": {"type": "object", "additionalProperties": True}},
+                        "required": ["io.modelcontextprotocol/protocolVersion", "io.modelcontextprotocol/clientCapabilities"]}},
+                      "additionalProperties": True}}}),
+                "responses": {"200": {"description": "MCP JSON-RPC response"},
+                              "202": {"description": "MCP notification accepted"},
+                              "400": {"$ref": "#/components/responses/Error"}},
+            }
+        },
+                "/agent/v1/services/{service_id}/tools": {
             "get": {
                 "summary": "List platform-aware runtime tools enabled for this Agent",
                 "responses": {
@@ -941,6 +1039,8 @@ def build_openapi(agent, *, request=None):
                 "command": {"type": "string", "minLength": 1},
                 "confirm": {"type": "boolean", "default": False},
                 "dry_run": {"type": "boolean", "default": False},
+                "output_mode": {"type": "string", "enum": ["full", "summary"], "default": "full"},
+                "max_output_bytes": {"type": "integer", "minimum": 1024, "maximum": 262144, "default": 65536},
                 "token": {"type": "string", "writeOnly": True, "description": "Optional body fallback for X-Shell-Token."},
             },
         },
@@ -952,6 +1052,11 @@ def build_openapi(agent, *, request=None):
                 "exit_code": {"type": "integer"},
                 "stdout": {"type": "string"},
                 "stderr": {"type": "string"},
+                "stdout_bytes": {"type": "integer"},
+                "stderr_bytes": {"type": "integer"},
+                "output_bytes": {"type": "integer"},
+                "output_truncated": {"type": "boolean"},
+                "output_mode": {"type": "string"},
                 "duration_ms": {"type": "integer", "nullable": True},
                 "cwd": {"type": "string"},
                 "session_id": {"type": "string", "format": "uuid", "nullable": True},
@@ -1521,12 +1626,17 @@ def build_openapi(agent, *, request=None):
         {"type": "string"},
         description="Temporary restricted shell-session credential.",
     )
-    for p in (
-        "/agent/v1/services/{service_id}/shell/sessions/{session_id}/commands",
-        "/agent/v1/services/{service_id}/shell/sessions/{session_id}/close",
-        "/agent/v1/services/{service_id}/shell/files",
+    for p, method in (
+        ("/agent/v1/services/{service_id}/shell/sessions/{session_id}/commands", "post"),
+        ("/agent/v1/services/{service_id}/shell/sessions/{session_id}/close", "post"),
+        ("/agent/v1/services/{service_id}/shell/files", "post"),
+        ("/agent/v1/services/{service_id}/workspace/tree", "get"),
+        ("/agent/v1/services/{service_id}/workspace/read-many", "post"),
+        ("/agent/v1/services/{service_id}/workspace/write-many", "post"),
+        ("/agent/v1/services/{service_id}/workspace/patch", "post"),
+        ("/agent/v1/services/{service_id}/workspace/search", "post"),
     ):
-        op = paths[p]["post"]
+        op = paths[p][method]
         _merge_query_parameters(op, [shell_token])
 
     # Ensure every registered contract gets operation metadata, path parameters,

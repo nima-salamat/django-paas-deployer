@@ -66,13 +66,48 @@ class ShellCommandView(AgentSecuredAPIView):
         if not command:raise AgentError("INVALID_REQUEST","command is required.",status_code=400)
         result=execute_command(session,command,confirm=bool(request.data.get("confirm",False)),dry_run=bool(request.data.get("dry_run",False)))
         safe=redact_shell_result(service,result)
-        self.audit_metadata={"session_id":str(session.pk),"command_length":len(command),"exit_code":safe.get("exit_code"),"risk":safe.get("risk")}
+        try:
+            output_limit = max(1024, min(int(request.data.get("max_output_bytes") or 65536), 262144))
+        except (TypeError, ValueError):
+            raise AgentError("INVALID_REQUEST", "max_output_bytes must be an integer.", status_code=400)
+        output_mode = str(request.data.get("output_mode") or "full").strip().lower()
+        if output_mode not in {"full", "summary"}:
+            raise AgentError("INVALID_REQUEST", "output_mode must be full or summary.", status_code=400)
+        stdout_raw = str(safe.get("stdout") or "").encode("utf-8")
+        stderr_raw = str(safe.get("stderr") or "").encode("utf-8")
+        if output_mode == "summary":
+            stdout_text = stdout_raw[:512].decode("utf-8", "ignore")
+            stderr_text = stderr_raw[:512].decode("utf-8", "ignore")
+        else:
+            stdout_cap = min(len(stdout_raw), (output_limit * 3) // 4)
+            stderr_cap = min(len(stderr_raw), output_limit - stdout_cap)
+            spare = output_limit - stdout_cap - stderr_cap
+            if spare:
+                extra_stdout = min(spare, len(stdout_raw) - stdout_cap)
+                stdout_cap += extra_stdout
+                spare -= extra_stdout
+            if spare:
+                stderr_cap += min(spare, len(stderr_raw) - stderr_cap)
+            stdout_text = stdout_raw[:stdout_cap].decode("utf-8", "ignore")
+            stderr_text = stderr_raw[:stderr_cap].decode("utf-8", "ignore")
+        output_truncated = (
+            len(stdout_text.encode("utf-8")) < len(stdout_raw)
+            or len(stderr_text.encode("utf-8")) < len(stderr_raw)
+        )
+        self.audit_metadata={"session_id":str(session.pk),"command_length":len(command),"exit_code":safe.get("exit_code"),"risk":safe.get("risk"),
+                             "output_bytes":len(stdout_text.encode("utf-8")) + len(stderr_text.encode("utf-8")),
+                             "output_truncated":output_truncated}
         payload = {
             "result": "success",
             "command": safe.get("command") or command,
             "exit_code": safe.get("exit_code"),
-            "stdout": safe.get("stdout"),
-            "stderr": safe.get("stderr"),
+            "stdout": stdout_text,
+            "stderr": stderr_text,
+            "stdout_bytes": len(stdout_raw),
+            "stderr_bytes": len(stderr_raw),
+            "output_bytes": len(stdout_text.encode("utf-8")) + len(stderr_text.encode("utf-8")),
+            "output_truncated": output_truncated,
+            "output_mode": output_mode,
             "duration_ms": safe.get("duration_ms"),
             "cwd": safe.get("cwd") or session.workdir,
             "session_id": str(session.pk),

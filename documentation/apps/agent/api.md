@@ -202,3 +202,108 @@ flowchart LR
     D --> RUNTIME[Docker / Swarm]
     SH --> RUNTIME
 ```
+
+
+## Efficient Agent interfaces
+
+### Combined context and conditional caching
+
+`GET /agent/v1/context` returns Agent identity, enabled capabilities and Skill
+metadata in one response. Add `?include=services` to also return the first
+paginated service list when the Agent has `services.read`. Context without
+service data uses a 30-second max-age; context with services uses a 5-second
+max-age. It also returns an `ETag`. Send that value in
+`If-None-Match` on subsequent requests; an unchanged response returns
+`304 Not Modified`. The cache is private to the authenticated Agent and has a
+short max-age. Fetch OpenAPI and a full Skill only when the current task needs
+the detailed contract.
+
+### Workspace operations
+
+All workspace endpoints require the matching `shell.files.read` or
+`shell.files.write` scope, existing service shell permission, and the temporary
+Shell session token in `X-Shell-Token`. The service workspace boundary and
+container-side symlink checks are reused from the existing restricted file API.
+
+| Method | Endpoint | Purpose and bounds |
+|---|---|---|
+| `GET` | `/agent/v1/services/{service_id}/workspace/tree` | List workspace entries; depth 1–8, page limit up to 1000, offset pagination, ETag. |
+| `POST` | `/agent/v1/services/{service_id}/workspace/read-many` | Read 1–30 files; aggregate response capped at 2 MiB; optional line range; returns SHA256 for each file. |
+| `POST` | `/agent/v1/services/{service_id}/workspace/write-many` | Write 1–20 existing files; 256 KiB per file and 2 MiB aggregate; optional `expected_sha256`; idempotent. |
+| `POST` | `/agent/v1/services/{service_id}/workspace/patch` | Up to 50 exact find/replace changes, requires the source SHA256, 256 KiB patch limit, dry-run by default; idempotent. |
+| `POST` | `/agent/v1/services/{service_id}/workspace/search` | Bounded fixed-string or regex search; max 500 returned matches. |
+
+A patch is applied only when both `dry_run=false` and `apply=true` are present.
+The operation refuses to patch when the source file's hash differs from
+`expected_sha256`, or when a requested find-context does not match its
+`expected_count`. Review the returned unified diff before applying. The
+managed text reader has a 256 KiB preview limit; larger files are explicitly
+marked `content_truncated` and are not returned with a misleading preview hash.
+Use a smaller file or a line-oriented inspection strategy before editing them.
+The SHA256 comparison is an optimistic pre-write check, not a lock against
+concurrent runtime writers. Batch file writes report each file's result
+separately; a batch is not an atomic filesystem transaction. Re-read important
+files after writing.
+
+The existing `/shell/files` endpoint remains available for single file
+operations, uploads, creates, renames and deletes. Multi-file write-many is for
+existing text files and does not replace upload.
+
+### Command batches and output controls
+
+`POST /agent/v1/services/{service_id}/commands/batch` accepts 1–10 command
+objects, each containing a non-empty `argv` array and optional `confirm`.
+Commands are validated independently by the existing restricted runtime shell
+policy; this API does not accept arbitrary shell strings. The response contains
+per-command exit status and bounded stdout/stderr. The combined output budget
+defaults to 64 KiB and is configurable up to 256 KiB. Use
+`continue_on_error=false` to stop after the first unsuccessful command.
+Mutating batches support `Idempotency-Key`.
+
+The one-shot shell command endpoint also accepts `output_mode=summary|full`
+and `max_output_bytes` (1 KiB–256 KiB, default 64 KiB). The response reports
+original and returned byte counts and whether output was truncated.
+
+The existing PTY WebSocket supports a `command.batch` message with up to 10
+commands. Events include `batch.started`, `batch.command.started`,
+`process.output`, `process.exit`, `batch.command.completed` and
+`batch.completed`. Commands run sequentially on one persistent socket;
+stdin and signals continue to target the active command. A second command
+cannot be started while the batch is running.
+
+### MCP Streamable HTTP
+
+The MCP endpoint is service-scoped:
+
+`POST /agent/v1/services/{service_id}/mcp`
+
+It uses the normal Agent Bearer credential and applies the same per-tool Agent
+scope checks and service authorization as the underlying API. It is stateless:
+there is no MCP session ID or long-lived GET event stream. It supports
+protocol revisions `2026-07-28` and `2025-11-25`.
+
+For revision `2026-07-28`, each POST includes:
+- `MCP-Protocol-Version: 2026-07-28`
+- `Mcp-Method` matching the JSON-RPC method
+- `Mcp-Name` matching `params.name` for `tools/call`
+- `Accept: application/json, text/event-stream`
+- `params._meta["io.modelcontextprotocol/protocolVersion"]` matching the header
+- `params._meta["io.modelcontextprotocol/clientCapabilities"]` as an object
+
+The 2026-07-28 revision requires `_meta` on every JSON-RPC request and returns
+`resultType: "complete"` plus server metadata in result `_meta` for successful
+responses. It is stateless and does not use `initialize`; the initialization
+compatibility response is available only to 2025-11-25 clients.
+
+The endpoint validates the Origin header when supplied. Use HTTPS and never
+place the Agent token in a URL. Discover available tools with
+`tools/list`, then invoke them with `tools/call`. For workspace operations,
+first call `shell.session.create`, pass its short-lived token as the
+`shell_token` argument to workspace tools, and call `shell.session.close`
+when finished. Tool availability is scoped to the Agent and service; MCP does
+not elevate permissions or replace REST.
+
+Supported MCP methods currently include `initialize` for legacy
+`2025-11-25` clients, `ping`, `tools/list`, and `tools/call`. Responses use
+JSON-RPC JSON bodies; accepted notifications return HTTP 202 with no body.
+

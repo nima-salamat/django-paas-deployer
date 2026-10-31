@@ -54,6 +54,7 @@ CONTRACTS: tuple[EndpointContract, ...] = (
     _contract("/agent/v1/auth/me", "GET"),
     _contract("/agent/v1/capabilities", "GET"),
     _contract("/agent/v1/openapi.json", "GET"),
+    _contract("/agent/v1/context", "GET"),
     _contract("/agent/v1/agent.md", "GET", scopes=("agent.manifest.generate",), throttle_scope="mutation"),
 
     _contract("/agent/v1/services", "GET", scopes=("services.read",)),
@@ -99,6 +100,13 @@ CONTRACTS: tuple[EndpointContract, ...] = (
     _contract("/agent/v1/services/{service_id}/shell/sessions/{session_id}/close", "POST", scopes=("shell.execute",), mutating=True, throttle_scope="shell"),
     _contract("/agent/v1/services/{service_id}/shell/replace", "POST", scopes=("shell.replace",), mutating=True, throttle_scope="shell"),
     _contract("/agent/v1/services/{service_id}/shell/files", "POST", any_scopes=("shell.files.read", "shell.files.write"), mutating=True, throttle_scope="shell"),
+    _contract("/agent/v1/services/{service_id}/workspace/tree", "GET", scopes=("shell.files.read",), throttle_scope="shell"),
+    _contract("/agent/v1/services/{service_id}/workspace/read-many", "POST", scopes=("shell.files.read",), throttle_scope="shell"),
+    _contract("/agent/v1/services/{service_id}/workspace/write-many", "POST", scopes=("shell.files.write",), mutating=True, idempotent=True, throttle_scope="shell"),
+    _contract("/agent/v1/services/{service_id}/workspace/patch", "POST", scopes=("shell.files.write",), mutating=True, idempotent=True, throttle_scope="shell"),
+    _contract("/agent/v1/services/{service_id}/workspace/search", "POST", scopes=("shell.files.read",), throttle_scope="shell"),
+    _contract("/agent/v1/services/{service_id}/commands/batch", "POST", scopes=("shell.execute",), mutating=True, idempotent=True, throttle_scope="shell"),
+    _contract("/agent/v1/services/{service_id}/mcp", "POST", any_scopes=("services.read", "shell.read", "shell.execute", "shell.files.read", "shell.files.write"), throttle_scope="shell"),
     _contract("/agent/v1/services/{service_id}/tools", "GET", any_scopes=("shell.read", "shell.execute"), throttle_scope="shell"),
     _contract("/agent/v1/services/{service_id}/tools/{tool_name}", "POST", any_scopes=("shell.read", "shell.execute"), mutating=True, idempotent=True, throttle_scope="shell"),
 
