@@ -174,11 +174,18 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         service = MagicMock()
         service.attrs = {
             "Spec": {
+                # Updating an existing Swarm service requires positive proof
+                # that it is owned by the Service under test.
+                "Labels": {
+                    "managed-by": "django-paas-deployer",
+                    "passdeployer.service": "svc-1",
+                },
                 "TaskTemplate": {
                     "ForceUpdate": 7,
                 },
             },
         }
+        service.name = "demo"
         service.reload.return_value = service
         client.services.get.return_value = service
         runtime = SwarmRuntime(client)
