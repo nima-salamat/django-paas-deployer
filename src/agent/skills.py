@@ -966,13 +966,15 @@ user's visibility. A successful DM response includes the conversation id.
 - DELETE {{base}}/messenger/messages/{message_id}
 - POST {{base}}/messenger/messages/{message_id}/cancel-schedule
 
-Message body is UTF-8 text (the application describes it as plain text /
-Markdown-ish). Preserve Unicode and emoji exactly; line breaks are meaningful.
-Do not send HTML markup as a message body. Use reply_to for a reply, emoji for
-reactions, and scheduled_for as an ISO-8601 datetime with timezone when sending
-a future message. Scheduled sends require both messenger.messages.send and
-messenger.messages.schedule. A scheduled message is private to its sender until
-delivery. Use client_message_id to safely retry a message-send request.
+Message body is plain UTF-8 text. Unicode emoji and line breaks are
+supported and should be preserved. The API does not define a rich-text or
+Markdown rendering contract, so do not rely on Markdown syntax or HTML tags to
+produce visual styling; use readable plain text, line breaks and emoji.
+Use reply_to for a reply, emoji for reactions, and scheduled_for as an
+ISO-8601 datetime with timezone when sending a future message. Scheduled sends
+require both messenger.messages.send and messenger.messages.schedule. A
+scheduled message is private to its sender until delivery. Use
+client_message_id to safely retry a message-send request.
 
 A message may include reply metadata, reactions and attachment metadata in its
 serialized representation. The message endpoint applies the existing
