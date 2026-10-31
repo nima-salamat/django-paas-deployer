@@ -153,7 +153,9 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         client.services.get.side_effect = docker.errors.NotFound("missing")
         client.services.create.return_value = MagicMock()
         runtime = SwarmRuntime(client)
-        config = _config(networks=[], endpoints=[])
+        # This test exercises replica propagation, not registry-backed volume
+        # provisioning. Keep it independent from Service UUID/Volume rows.
+        config = _config(networks=[], endpoints=[], volumes=[])
 
         with patch.object(runtime, "assert_active"), \
              patch.object(runtime, "prepare_image", return_value="demo:r1"), \
@@ -180,7 +182,9 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         service.reload.return_value = service
         client.services.get.return_value = service
         runtime = SwarmRuntime(client)
-        config = _config(networks=[], endpoints=[])
+        # This test verifies ForceUpdate handling, not persistent-volume
+        # registry validation. It should not need a Service or Volume row.
+        config = _config(networks=[], endpoints=[], volumes=[])
 
         with patch.object(runtime, "assert_active"), \
              patch.object(runtime, "prepare_image", return_value="demo:r1"), \
