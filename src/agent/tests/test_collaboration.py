@@ -228,6 +228,7 @@ class AgentCollaborationContractTests(TestCase):
             "messenger.messages.read",
             "messenger.messages.send",
             "messenger.messages.react",
+            "messenger.messages.reactions.remove",
         ]
         self.agent.save(update_fields=["scopes", "updated_at"])
 
@@ -335,6 +336,24 @@ class AgentCollaborationContractTests(TestCase):
         self.assertEqual(
             json.loads(reaction.content.decode("utf-8"))["data"]["emoji"],
             "❤️",
+        )
+
+        removed = self.client.delete(
+            reaction_url,
+            {"emoji": "❤️"},
+            format="json",
+            **self.auth(),
+        )
+        self.assertEqual(removed.status_code, 200)
+        self.assertEqual(removed.data["data"]["emoji"], "❤️")
+        self.assertEqual(removed.data["data"]["action"], "removed")
+        self.assertIn("❤️".encode("utf-8"), removed.content)
+        self.assertFalse(
+            MessageReaction.objects.filter(
+                message=stored,
+                user=self.user,
+                emoji="❤️",
+            ).exists()
         )
 
     def test_messenger_json_rejects_non_utf8_declared_charset(self):
