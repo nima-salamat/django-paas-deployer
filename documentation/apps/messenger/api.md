@@ -36,6 +36,7 @@ Topic handlers live in `src/messenger/api/topics.py`. For standard groups, GET/P
 | POST | /api/messenger/messages/<int:pk>/cancel-schedule/ | Cancel pending sender-owned scheduled message. |
 | POST | /api/messenger/conversations/<int:pk>/read/ | Update caller read state; returns the authoritative `last_read_at` cursor and invalidates the caller's conversation-list projection when it advances. |
 | POST | /api/messenger/messages/<int:pk>/react/ | Reaction toggle. |
+| DELETE | /api/messenger/messages/<int:pk>/react/ | Remove the authenticated user's reaction for the supplied emoji in the request body; idempotent and never removes another user's reaction. |
 | PATCH | /api/messenger/messages/<int:pk>/edit/ | Sender-authorized edit. |
 | DELETE | /api/messenger/messages/<int:pk>/ | Sender/role-constrained delete. |
 | POST | /api/messenger/messages/<int:pk>/forward/ | Forward accessible message to authorized destination. |
@@ -46,7 +47,9 @@ Topic handlers live in `src/messenger/api/topics.py`. For standard groups, GET/P
 | Method | Route | Important contract |
 |---|---|---|
 | POST | /api/messenger/conversations/<int:pk>/pin/ | Caller conversation-list pin state. |
-| POST | /api/messenger/messages/<int:pk>/pin/ | Message pin. |
+| POST | /api/messenger/messages/<int:pk>/pin/ | Legacy toggle pin/unpin action. |
+| PUT | /api/messenger/messages/<int:pk>/pin/ | Ensure the message is pinned; idempotent. |
+| DELETE | /api/messenger/messages/<int:pk>/pin/ | Ensure the message is unpinned; idempotent. |
 | GET | /api/messenger/conversations/<int:pk>/pinned-messages/ | Canonical pinned-message route; /pinned/ is not registered. |
 | POST | /api/messenger/conversations/<int:pk>/invite-links/ | Create group invite; owner/admin only. |
 | POST | /api/messenger/conversations/<int:pk>/invite-links/<int:link_id>/revoke/ | Revoke invite; one POST action endpoint, not DELETE. |
