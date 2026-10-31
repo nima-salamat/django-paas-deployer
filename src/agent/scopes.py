@@ -36,7 +36,7 @@ DESTRUCTIVE_SCOPES=frozenset({
     "messenger.permissions.manage","messenger.join_requests.manage","tickets.close",
 })
 
-HIGH_RISK_SCOPES=frozenset({"agent.manifest.generate","service_database_credentials.read","services.delete","services.purge","deployments.cancel","deployments.rebuild","deployments.rollback","deployments.delete","shell.developer","service_secrets.write","service_volumes.write","service_networks.write","shell.execute","shell.replace","shell.files.write"})
+HIGH_RISK_SCOPES=frozenset({"agent.manifest.generate","service_database_credentials.read","services.delete","services.purge","deployments.cancel","deployments.rebuild","deployments.rollback","deployments.delete","shell.developer","service_secrets.write","service_volumes.write","service_networks.write","shell.execute","shell.replace","shell.files.write","messenger.blocks.write","messenger.messages.delete","messenger.members.manage","messenger.permissions.manage","messenger.join_requests.manage","tickets.close"})
 
 def validate_scopes(scopes):
     values=sorted({str(s).strip() for s in (scopes or []) if str(s).strip()})
