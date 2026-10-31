@@ -417,6 +417,75 @@ class AgentMessengerMessageReactView(AgentMessengerView):
             return error
         return _call_messenger("MessageReactAPIView", "post", request, message_id)
 
+    @idempotent
+    def delete(self, request, message_id):
+        from messenger.models import Message
+
+        msg = (
+            Message.objects.select_related("conversation")
+            .filter(pk=message_id, is_deleted=False)
+            .first()
+        )
+        if msg is None:
+            return _agent_error("RESOURCE_NOT_FOUND", "Message not found.", 404)
+        _, _, error = _standard_conversation(request, msg.conversation_id)
+        if error:
+            return error
+        return _call_messenger(
+            "MessageReactionDeleteAPIView", "delete", request, message_id
+        )
+
+
+class AgentMessengerMessagePinView(AgentMessengerView):
+    agent_contract_path = "/agent/v1/messenger/messages/{message_id}/pin"
+    audit_action = "agent.messenger.messages.pin"
+    audit_mutating = True
+
+    @idempotent
+    def put(self, request, message_id):
+        from messenger.models import Message
+
+        msg = (
+            Message.objects.select_related("conversation")
+            .filter(pk=message_id, is_deleted=False)
+            .first()
+        )
+        if msg is None:
+            return _agent_error("RESOURCE_NOT_FOUND", "Message not found.", 404)
+        _, _, error = _standard_conversation(request, msg.conversation_id)
+        if error:
+            return error
+        return _call_messenger("MessagePinAPIView", "put", request, message_id)
+
+    @idempotent
+    def delete(self, request, message_id):
+        from messenger.models import Message
+
+        msg = (
+            Message.objects.select_related("conversation")
+            .filter(pk=message_id, is_deleted=False)
+            .first()
+        )
+        if msg is None:
+            return _agent_error("RESOURCE_NOT_FOUND", "Message not found.", 404)
+        _, _, error = _standard_conversation(request, msg.conversation_id)
+        if error:
+            return error
+        return _call_messenger("MessagePinAPIView", "delete", request, message_id)
+
+
+class AgentMessengerPinnedMessagesView(AgentMessengerView):
+    agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/pinned-messages"
+    audit_action = "agent.messenger.messages.pinned.read"
+
+    def get(self, request, conversation_id):
+        _, _, error = _standard_conversation(request, conversation_id)
+        if error:
+            return error
+        return _call_messenger(
+            "ConversationPinnedMessagesAPIView", "get", request, conversation_id
+        )
+
 
 class AgentMessengerMessageEditView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/messages/{message_id}/edit"
