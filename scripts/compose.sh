@@ -304,6 +304,8 @@ prepare_runtime_log_ingestion() {
     sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
 }
 
+prepare_runtime_log_ingestion "$@" || exit $?
+
 USE_MATRIX_POSTGRES=$(setting USE_MATRIX_POSTGRES)
 case "$(printf '%s' "$USE_MATRIX_POSTGRES" | tr '[:upper:]' '[:lower:]')" in
     1|true|yes|on)
