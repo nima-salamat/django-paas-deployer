@@ -307,3 +307,65 @@ Supported MCP methods currently include `initialize` for legacy
 `2025-11-25` clients, `ping`, `tools/list`, and `tools/call`. Responses use
 JSON-RPC JSON bodies; accepted notifications return HTTP 202 with no body.
 
+
+
+## Messenger Agent API
+
+The Agent facade exposes ordinary Messenger operations under
+\`/agent/v1/messenger\`. It reuses the existing Messenger views and their
+membership, block, posting, validation, cache and event rules.
+
+| Operation | Endpoint | Required scope |
+|---|---|---|
+| Search users | \`GET /agent/v1/messenger/users/search?q=...\` | \`messenger.users.search\` |
+| List/add contacts | \`GET/POST /agent/v1/messenger/contacts\` | \`messenger.contacts.read/write\` |
+| Remove contact | \`DELETE /agent/v1/messenger/contacts/{user_id}\` | \`messenger.contacts.write\` |
+| List/block users | \`GET/POST /agent/v1/messenger/blocks\` | \`messenger.blocks.read/write\` |
+| Unblock user | \`DELETE /agent/v1/messenger/blocks/{user_id}\` | \`messenger.blocks.write\` |
+| List/create conversations | \`GET/POST /agent/v1/messenger/conversations\` | \`messenger.conversations.read/create\` |
+| Read/update conversation | \`GET/PATCH /agent/v1/messenger/conversations/{conversation_id}\` | \`messenger.conversations.read/update\` |
+| Read/send messages | \`GET/POST /agent/v1/messenger/conversations/{conversation_id}/messages\` | \`messenger.messages.read/send\` |
+| Search message history | \`GET /agent/v1/messenger/conversations/{conversation_id}/messages/search\` | \`messenger.messages.search\` |
+| Scheduled messages | \`GET /agent/v1/messenger/conversations/{conversation_id}/scheduled\` | \`messenger.messages.read\` |
+| Mark conversation read | \`POST /agent/v1/messenger/conversations/{conversation_id}/read\` | \`messenger.messages.read_state.write\` |
+| React/edit/delete | \`POST .../messages/{message_id}/react\`, \`PATCH .../edit\`, \`DELETE .../messages/{message_id}\` | \`messenger.messages.react/edit/delete\` |
+| Schedule cancellation | \`POST /agent/v1/messenger/messages/{message_id}/cancel-schedule\` | \`messenger.messages.schedule\` |
+| Search/join public groups | \`GET /agent/v1/messenger/groups/search\`, \`POST .../groups/{conversation_id}/join\` | \`messenger.groups.search/join\` |
+| Members and permissions | \`GET .../participants\`, \`POST .../members\`, \`DELETE .../members/{user_id}\`, \`POST .../role\`, \`PATCH .../permissions\` | \`messenger.members.read/manage\`, \`messenger.permissions.manage\` |
+| Join request management | \`GET .../join-requests\`, \`POST .../join-requests/{request_id}/action\` | \`messenger.join_requests.read/manage\` |
+
+Conversation/message history endpoints return only conversations whose
+security mode is \`standard\`. Matrix E2EE is not exposed through this Agent
+facade and is not downgraded to plaintext. The standard chat body is UTF-8
+text with Unicode emoji and line breaks; the Agent skill describes the
+plain-text/Markdown-ish format. Message creation supports the existing
+\`scheduled_for\` ISO-8601 field and \`client_message_id\` retry key.
+
+## Ticket Agent API
+
+Ticket access is deliberately limited to records owned by the user attached
+to the Agent credential. Agent credentials do not grant staff or administrator
+access.
+
+| Operation | Endpoint | Required scope |
+|---|---|---|
+| Departments | \`GET /agent/v1/tickets/departments\` | \`tickets.departments.read\` |
+| Owned services/deploys | \`GET /agent/v1/tickets/context\` | \`tickets.context.read\` |
+| List/create tickets | \`GET/POST /agent/v1/tickets\` | \`tickets.read/create\` |
+| Ticket detail | \`GET /agent/v1/tickets/{ticket_id}\` | \`tickets.read\` |
+| Reply | \`POST /agent/v1/tickets/{ticket_id}/messages\` | \`tickets.reply\` |
+| Mark messages read | \`POST /agent/v1/tickets/{ticket_id}/read\` | \`tickets.read_state.write\` |
+| Close owned ticket | \`POST /agent/v1/tickets/{ticket_id}/close\` | \`tickets.close\` |
+
+Ticket bodies are sanitized HTML (paragraphs, emphasis, lists, links,
+blockquote and code blocks) and accept Unicode emoji. Sanitization strips
+scripts, event handlers and unsafe URL protocols. This differs intentionally
+from Messenger's text body format.
+
+## Agent scope catalog additions
+
+Messenger scopes are grouped under \`messenger\` in \`scope_categories\`, and
+Ticket scopes under \`tickets\`. They are not part of default Agent scopes;
+an administrator must explicitly grant them. Blocking, deleting messages,
+managing memberships/permissions/join requests and closing tickets are
+treated as destructive/high-risk operations as declared in \`scopes.py\`.
