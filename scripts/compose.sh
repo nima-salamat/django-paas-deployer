@@ -154,7 +154,57 @@ preflight_matrix_postgres_network() {
     export MATRIX_DOCKER_NETWORK
 }
 
+# Prepare the host Unix socket and shared ingestion secret only for
+# commands that can start or recreate services. The token is persisted in
+# .env, generated locally, and never printed to the terminal.
+prepare_runtime_log_ingestion() {
+    compose_command=""
+    for arg in "$@"; do
+        case "$arg" in
+            up|start|restart|create|run) compose_command=$arg; break ;;
+        esac
+    done
+    [ -n "$compose_command" ] || return 0
+
+    [ -f .env ] || {
+        echo "ERROR: .env is required. Copy .env.example to .env first." >&2
+        return 2
+    }
+
+    LOG_INGEST_SHARED_TOKEN=$(setting LOG_INGEST_SHARED_TOKEN)
+    if [ -z "$LOG_INGEST_SHARED_TOKEN" ]; then
+        command -v openssl >/dev/null 2>&1 || {
+            echo "ERROR: openssl is required to generate LOG_INGEST_SHARED_TOKEN." >&2
+            return 2
+        }
+        LOG_INGEST_SHARED_TOKEN=$(openssl rand -hex 32)
+        [ -n "$LOG_INGEST_SHARED_TOKEN" ] || {
+            echo "ERROR: Could not generate LOG_INGEST_SHARED_TOKEN." >&2
+            return 2
+        }
+        printf '\\nLOG_INGEST_SHARED_TOKEN=%s\\n' "$LOG_INGEST_SHARED_TOKEN" >> .env
+        chmod 600 .env
+        echo "Generated LOG_INGEST_SHARED_TOKEN in .env."
+    fi
+    export LOG_INGEST_SHARED_TOKEN
+
+    LOG_FORWARD_SOCKET_DIR=$(setting LOG_FORWARD_SOCKET_DIR)
+    : "${LOG_FORWARD_SOCKET_DIR:=/run/passdeployer-logs}"
+    export LOG_FORWARD_SOCKET_DIR
+
+    if [ "$(id -u)" -eq 0 ]; then
+        sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
+    else
+        echo "ERROR: root or sudo is required to prepare the Docker log socket directory." >&2
+        return 2
+    fi
+}
+
 USE_MATRIX_POSTGRES=$(setting USE_MATRIX_POSTGRES)
+prepare_runtime_log_ingestion "$@" || exit $?
+
 case "$(printf '%s' "$USE_MATRIX_POSTGRES" | tr '[:upper:]' '[:lower:]')" in
     1|true|yes|on)
         MATRIX_POSTGRES_HOST=$(setting MATRIX_POSTGRES_HOST)
