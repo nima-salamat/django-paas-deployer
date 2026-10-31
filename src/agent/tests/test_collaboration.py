@@ -241,6 +241,15 @@ class AgentCollaborationContractTests(TestCase):
             role=ConversationParticipant.Role.OWNER,
         )
 
+        # This project uses PostgreSQL; both its stored text encoding and the
+        # active connection encoding must support Unicode end-to-end.
+        from django.db import connection
+        with connection.cursor() as cursor:
+            cursor.execute("SHOW server_encoding")
+            self.assertEqual(cursor.fetchone()[0].upper(), "UTF8")
+            cursor.execute("SHOW client_encoding")
+            self.assertEqual(cursor.fetchone()[0].upper(), "UTF8")
+
         body = "سلام دنیا 👋\nخط دوم؛ متن فارسی باید دقیق ذخیره شود."
         client_message_id = str(uuid4())
         idempotency_key = f"messenger-unicode-{uuid4()}"
