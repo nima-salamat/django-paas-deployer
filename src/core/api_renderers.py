@@ -88,6 +88,7 @@ class ProductionJSONRenderer(JSONRenderer):
     """
 
     charset = "utf-8"
+    ensure_ascii = False
 
     def render(self, data: Any, accepted_media_type=None, renderer_context=None):
         response = (renderer_context or {}).get("response")
