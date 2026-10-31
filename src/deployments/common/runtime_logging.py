@@ -61,19 +61,10 @@ def fluentd_log_driver_options() -> dict[str, str]:
     }
 
 
-def docker_log_config():
-    """Docker host-config shape for non-Swarm containers, or None when disabled."""
-    if not runtime_log_ingestion_enabled():
-        return None
-    from docker.types import LogConfig
-
-    return LogConfig(type="fluentd", config=fluentd_log_driver_options())
-
 
 __all__ = [
     "DEFAULT_FORWARD_SOCKET",
     "forward_socket_path",
     "runtime_log_ingestion_enabled",
     "fluentd_log_driver_options",
-    "docker_log_config",
 ]
