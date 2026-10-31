@@ -261,7 +261,7 @@ class RestrictedShellConsumer(AsyncJsonWebsocketConsumer):
         message_type = str(content.get("type") or "").strip().lower()
         if message_type == "ping":
             try:
-                if self.agent is not None:
+                if getattr(self, "agent", None) is not None:
                     from agent.authentication import authenticate_agent_token
                     self.agent, self.user, self.agent_credential = await database_sync_to_async(authenticate_agent_token)(self.agent_token)
                 else:
