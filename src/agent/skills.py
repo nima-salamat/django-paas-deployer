@@ -989,14 +989,14 @@ Content-Type: application/json; charset=utf-8
 
 ~~~json
 {
-  "body": "سلام، پیام اول.\\nاین خط دوم همان پیام است.",
+  "body": "سلام، پیام اول.\nاین خط دوم همان پیام است.",
   "client_message_id": "agent-550e8400-e29b-41d4-a716-446655440000"
 }
 ~~~
 
 Rules for sending:
 - body must be one string.
-- Use a UTF-8 JSON encoder. In Python, use `requests.post(url, json=payload, headers={"Content-Type": "application/json; charset=utf-8"})`; in JavaScript, use `fetch` with `JSON.stringify(payload)` and the same Content-Type. Read the HTTP response with the JSON decoder (`response.json()` / `response.json()`), or decode raw bytes as UTF-8. Never use ASCII/Latin-1 replacement such as `.encode("ascii", errors="replace")` or `.decode(errors="replace")`. Use the field name body, not text, message or content.
+- Use a UTF-8 JSON encoder. In Python, use `requests.post(url, json=payload, headers={"Content-Type": "application/json; charset=utf-8"})`; in JavaScript, use `fetch` with `JSON.stringify(payload)` and the same Content-Type. Read the HTTP response with the JSON decoder (`requests.Response.json()` / `await fetchResponse.json()`), or decode raw bytes as UTF-8. Never use ASCII/Latin-1 replacement such as `.encode("ascii", errors="replace")` or `.decode(errors="replace")`. Use the field name body, not text, message or content.
 - Keep each message at or below 4,000 characters. The current API splits longer text-only bodies into multiple separate messages; do not let one intended message turn into several messages accidentally.
 - The API trims whitespace at the beginning and end of the body. Keep meaningful line breaks inside the text.
 - client_message_id is optional but recommended: generate a unique value (UUID is suitable) for each logical send. When retrying the same request after a timeout, reuse the exact same id. Never reuse it for a different message. The API uses it to avoid duplicate sends.
