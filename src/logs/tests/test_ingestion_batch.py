@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from django.utils import timezone
 
 from logs.ingestion import ingest_lines
@@ -8,11 +8,11 @@ from logs.models import LogUsageDaily, ServiceLogEntry, ServiceLogStream, Servic
 from logs.policy import EffectiveLoggingPolicy
 
 
-@override_settings(DEPLOYMENT_LOG_DB_ALIAS="default")
 class BulkRuntimeLogIngestionTests(TestCase):
+    databases = {"default", "deployment_logs"}
     def setUp(self):
         self.service_id = uuid4()
-        self.stream = ServiceLogStream.objects.using("default").create(
+        self.stream = ServiceLogStream.objects.using("deployment_logs").create(
             service_id=self.service_id,
             container_id="a" * 64,
             container_name="app-test",
@@ -84,5 +84,5 @@ class BulkRuntimeLogIngestionTests(TestCase):
         self.assertEqual(result["duplicates"], 2)
         row = ServiceLogEntry.objects.using("default").get(stream_id=self.stream.pk)
         self.assertEqual(row.seq, 1)
-        self.stream.refresh_from_db(using="default")
+        self.stream.refresh_from_db(using="deployment_logs")
         self.assertEqual(self.stream.last_seq, 3)
