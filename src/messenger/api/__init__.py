@@ -9,7 +9,7 @@ from .conversations import (
 )
 from .messages import (
     MessageListCreateAPIView, MessageForwardAPIView, MessageReactAPIView,
-    MessageEditAPIView, MessageDeleteAPIView, MarkReadAPIView,
+    MessageReactionDeleteAPIView, MessageEditAPIView, MessageDeleteAPIView, MarkReadAPIView,
     MessageSearchAPIView, ScheduledMessageCancelAPIView, ScheduledMessageListAPIView,
 )
 from .members import (
@@ -48,7 +48,7 @@ __all__ = [
     "BlockListCreateAPIView", "UnblockAPIView",
     "ConversationListCreateAPIView", "ConversationDetailAPIView",
     "MessageListCreateAPIView", "MessageForwardAPIView", "MessageReactAPIView",
-    "MessageEditAPIView", "MessageDeleteAPIView", "MarkReadAPIView",
+    "MessageReactionDeleteAPIView", "MessageEditAPIView", "MessageDeleteAPIView", "MarkReadAPIView",
     "MessageSearchAPIView", "ScheduledMessageCancelAPIView", "ScheduledMessageListAPIView",
     "LeaveConversationAPIView", "RemoveMemberAPIView", "MemberRoleAPIView",
     "TransferOwnershipAPIView", "AddMembersAPIView", "DeleteConversationAPIView",
