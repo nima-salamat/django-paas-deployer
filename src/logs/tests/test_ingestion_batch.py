@@ -10,6 +10,7 @@ from logs.policy import EffectiveLoggingPolicy
 
 class BulkRuntimeLogIngestionTests(TestCase):
     databases = {"default", "deployment_logs"}
+
     def setUp(self):
         self.service_id = uuid4()
         self.stream = ServiceLogStream.objects.using("deployment_logs").create(
@@ -40,7 +41,7 @@ class BulkRuntimeLogIngestionTests(TestCase):
         self.assertEqual(result["inserted"], 2)
         self.assertEqual(result["duplicates"], 1)
         self.assertEqual(
-            ServiceLogEntry.objects.using("default")
+            ServiceLogEntry.objects.using("deployment_logs")
             .filter(stream_id=self.stream.pk)
             .count(),
             2,
