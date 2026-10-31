@@ -12,6 +12,7 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from .base import AgentSecuredAPIView, idempotent
+from ..parsers import UTF8JSONParser, UTF8MultiPartParser
 
 
 def _call_messenger(view_name: str, method: str, request, *args):
@@ -325,6 +326,8 @@ class AgentMessengerConversationDetailView(AgentMessengerView):
 
 
 class AgentMessengerMessagesView(AgentMessengerView):
+    # JSON text and multipart attachment fields must be decoded as UTF-8.
+    parser_classes = [UTF8JSONParser, UTF8MultiPartParser]
     agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/messages"
     audit_action = "agent.messenger.messages"
     audit_mutating = True
@@ -395,6 +398,7 @@ class AgentMessengerMarkReadView(AgentMessengerView):
 
 
 class AgentMessengerMessageReactView(AgentMessengerView):
+    parser_classes = [UTF8JSONParser]
     agent_contract_path = "/agent/v1/messenger/messages/{message_id}/react"
     audit_action = "agent.messenger.messages.react"
     audit_mutating = True
