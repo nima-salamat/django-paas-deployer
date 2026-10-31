@@ -10,7 +10,7 @@ services:
     command:
       - /fluent-bit/bin/fluent-bit
       - -c
-      - /fluent-bit/etc/fluent-bit.conf
+      - /fluent-bit/etc/fluent-bit.yaml
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -18,7 +18,7 @@ services:
       - /tmp:size=8m,noexec,nosuid
     configs:
       - source: fluent-bit-config
-        target: /fluent-bit/etc/fluent-bit.conf
+        target: /fluent-bit/etc/fluent-bit.yaml
         mode: 0444
     volumes:
       - type: bind
@@ -54,7 +54,7 @@ services:
 
 configs:
   fluent-bit-config:
-    file: ./deploy/fluent-bit/fluent-bit.conf
+    file: ./deploy/fluent-bit/fluent-bit.yaml
 
 volumes:
   fluentbit_state:
