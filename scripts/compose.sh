@@ -182,15 +182,20 @@ prepare_runtime_log_ingestion() {
             echo "ERROR: Could not generate LOG_INGEST_SHARED_TOKEN." >&2
             return 2
         }
-        printf '\\nLOG_INGEST_SHARED_TOKEN=%s\\n' "$LOG_INGEST_SHARED_TOKEN" >> .env
+        printf '\nLOG_INGEST_SHARED_TOKEN=%s\n' "$LOG_INGEST_SHARED_TOKEN" >> .env
         chmod 600 .env
         echo "Generated LOG_INGEST_SHARED_TOKEN in .env."
     fi
     export LOG_INGEST_SHARED_TOKEN
 
-    LOG_FORWARD_SOCKET_DIR=$(setting LOG_FORWARD_SOCKET_DIR)
-    : "${LOG_FORWARD_SOCKET_DIR:=/run/passdeployer-logs}"
-    export LOG_FORWARD_SOCKET_DIR
+    LOG_FORWARD_SOCKET_PATH=$(setting LOG_FORWARD_SOCKET_PATH)
+    : "${LOG_FORWARD_SOCKET_PATH:=/run/passdeployer-logs/forward.sock}"
+    case "$LOG_FORWARD_SOCKET_PATH" in
+        /run/*/*.sock) ;;
+        *) echo "ERROR: LOG_FORWARD_SOCKET_PATH must be a .sock path under /run." >&2; return 2 ;;
+    esac
+    LOG_FORWARD_SOCKET_DIR=$(dirname "$LOG_FORWARD_SOCKET_PATH")
+    export LOG_FORWARD_SOCKET_PATH LOG_FORWARD_SOCKET_DIR
 
     if [ "$(id -u)" -eq 0 ]; then
         sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
