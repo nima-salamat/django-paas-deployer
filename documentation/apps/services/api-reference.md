@@ -23,6 +23,10 @@ sequenceDiagram
     D->>S: state/revision synchronization
 ```
 
+## Internal machine-to-machine route
+
+The Fluent Bit node agent uses `POST /services/internal/logs/ingest/`. This route is not a browser/user-session endpoint; it accepts only the installation-specific `LOG_INGEST_SHARED_TOKEN` header and validates Docker container ID plus PassDeployer service ownership labels. Payloads are bounded gzip JSON Lines batches. See the [runtime logs API contract](../logs/api.md) and [transport rollout](../deployments/execution/12-runtime-log-transport.md).
+
 ## Endpoint matrix
 
 | Method | Endpoint | Parameters | Required | Behavior |
