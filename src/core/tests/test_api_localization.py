@@ -56,6 +56,24 @@ class ApiLocalizationTests(SimpleTestCase):
         self.assertEqual(table["profile"]["label"], "Active")
         self.assertEqual(table["profile"]["description"], "An Active user-owned label.")
 
+    def test_production_renderer_preserves_persian_and_emoji_as_utf8(self):
+        payload = {
+            "success": True,
+            "message": "Sent",
+            "data": {
+                "body": "سلام دنیا 👋\nاین متن فارسی است.",
+                "emoji": "❤️",
+            },
+        }
+        rendered = ProductionJSONRenderer().render(
+            payload,
+            renderer_context={"response": Response(payload, status=200)},
+        )
+
+        self.assertIn("سلام".encode("utf-8"), rendered)
+        self.assertIn("❤️".encode("utf-8"), rendered)
+        self.assertEqual(json.loads(rendered.decode("utf-8")), payload)
+
     def test_validation_errors_translate_recursively_but_keep_machine_codes(self):
         payload = {
             "success": False,
