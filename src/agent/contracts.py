@@ -172,7 +172,7 @@ CONTRACTS: tuple[EndpointContract, ...] = (
     _contract("/agent/v1/messenger/messages/{message_id}/cancel-schedule", "POST", scopes=("messenger.messages.schedule",), mutating=True, idempotent=True, throttle_scope="mutation"),
     _contract("/agent/v1/messenger/groups/search", "GET", scopes=("messenger.groups.search",)),
     _contract("/agent/v1/messenger/groups/{conversation_id}/join", "POST", scopes=("messenger.groups.join",), mutating=True, idempotent=True, throttle_scope="mutation"),
-    _contract("/agent/v1/messenger/join/{code}", "POST", scopes=("messenger.invites.join",), mutating=True, idempotent=True, throttle_scope="mutation"),
+    _contract("/agent/v1/messenger/join", "POST", scopes=("messenger.invites.join",), mutating=True, idempotent=True, throttle_scope="mutation"),
     _contract("/agent/v1/messenger/me/join-requests", "GET", scopes=("messenger.join_requests.own.read",)),
     _contract("/agent/v1/messenger/join-requests/{request_id}", "DELETE", scopes=("messenger.join_requests.own.cancel",), mutating=True, idempotent=True, throttle_scope="mutation"),
     _contract("/agent/v1/messenger/conversations/{conversation_id}/participants", "GET", scopes=("messenger.members.read",)),
