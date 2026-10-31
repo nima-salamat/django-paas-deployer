@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from .base import AgentPublicAPIView, AgentSecuredAPIView
 from ..application import create_enrollment, issue_access_credential
 from ..contracts import contracts_for_agent
-from ..scopes import SERVICE_SCOPES, HIGH_RISK_SCOPES, scope_categories
+from ..scopes import SERVICE_SCOPES, MESSENGER_SCOPES, TICKET_SCOPES, HIGH_RISK_SCOPES, scope_categories
 from ..skills import skills_for_agent, skill_url
 from ..manifest import api_base_url
 
@@ -80,6 +80,15 @@ class AgentCapabilitiesView(AgentSecuredAPIView):
                 },
                 "logs": {"deployment_read":"deployments.logs.read" in s,"deployment_export":"deployments.logs.export" in s,"runtime_read":"service_logs.read" in s,"runtime_export":"service_logs.export" in s},
                 "shell": {"read":"shell.read" in s,"execute":"shell.execute" in s,"replace":"shell.replace" in s,"files_read":"shell.files.read" in s,"files_write":"shell.files.write" in s},
+                "messenger": {
+                    **{scope.split(".",1)[1]: scope in s for scope in MESSENGER_SCOPES},
+                    "standard_chats_only": True,
+                    "encrypted_chat_access": False,
+                },
+                "tickets": {
+                    **{scope.split(".",1)[1]: scope in s for scope in TICKET_SCOPES},
+                    "staff_admin": False,
+                },
                 "database": {"credentials_read": "service_database_credentials.read" in s},
                 "agent": {"manifest_generate":"agent.manifest.generate" in s},
             },
@@ -106,6 +115,9 @@ class AgentCapabilitiesView(AgentSecuredAPIView):
                 "workspace_batch": ["tree", "read-many", "write-many", "patch", "search"],
                 "command_batch": "/agent/v1/services/{service_id}/commands/batch",
                 "websocket_command_batch": True,
+                "messenger": "/agent/v1/messenger",
+                "tickets": "/agent/v1/tickets",
+                "tool_discovery": "scope-filtered skills and operations",
             },
             "idempotency": {"header":"Idempotency-Key","ttl_hours":24,"important_mutations":True},
             "operations": [
@@ -121,7 +133,7 @@ class AgentCapabilitiesView(AgentSecuredAPIView):
                 for item in contracts_for_agent(request.agent)
             ],
             "high_risk_scopes": sorted(HIGH_RISK_SCOPES & s),
-            "unsupported": ["Git deployment input", "existing-image deployment input", "host shell", "raw Docker API"],
+            "unsupported": ["Git deployment input", "existing-image deployment input", "host shell", "raw Docker API", "Messenger Matrix/E2EE chat"],
             "confirmation": {"shell_destructive_commands": True, "deployment_rebuild": "deployments.rebuild" in s, "deployment_rollback": "deployments.rollback" in s},
         })
 
