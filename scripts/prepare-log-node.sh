@@ -3,7 +3,14 @@ set -eu
 
 # Docker's Fluentd logging driver and Fluent Bit must see the same host UDS.
 # Install a tmpfiles rule so /run/passdeployer-logs is recreated after reboot.
-SOCKET_DIR=/run/passdeployer-logs
+SOCKET_DIR=${1:-/run/passdeployer-logs}
+case "$SOCKET_DIR" in
+    /run/*) ;;
+    *) echo "The log socket directory must be under /run." >&2; exit 2 ;;
+esac
+case "$SOCKET_DIR" in
+    *..*|*\n*) echo "Invalid log socket directory." >&2; exit 2 ;;
+esac
 RULE=/etc/tmpfiles.d/passdeployer-logs.conf
 
 if [ "$(id -u)" -ne 0 ]; then
