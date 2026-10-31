@@ -40,6 +40,11 @@ Log access is authorized by the owning Service/share boundary before log query/e
 
 models.md -> background.md -> owning API documentation.
 
+## Runtime transport
+
+- `src/logs/ingest_api.py` — authenticated, bounded machine-to-machine NDJSON ingestion from the per-node Fluent Bit agent. Docker service/container metadata is validated before it is associated with a Service.
+- [Runtime log transport rollout and rollback](../deployments/execution/12-runtime-log-transport.md) — Docker Fluentd driver, Fluent Bit node agents, private network and durable log path.
+
 ## Contract references
 
 - [API reference](api.md)
