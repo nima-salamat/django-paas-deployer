@@ -78,6 +78,16 @@ The API reference is source-defined from `src/agent/contracts.py`; the machine-r
 - [Browser Agent management API](user-api.md)
 
 
+## Unicode and request parsing
+
+The Agent Messenger send-message endpoint accepts UTF-8 JSON and UTF-8
+multipart text fields. Reaction add/remove endpoints accept UTF-8 JSON only.
+The dedicated parsers in `src/agent/parsers.py` reject an explicitly
+non-UTF-8 charset so Persian text cannot be silently decoded with a legacy
+encoding. The shared production JSON renderer emits literal Unicode as UTF-8;
+message bodies and reaction emoji remain user data and are not localized or
+ASCII-converted.
+
 ## Messenger and Tickets
 
 \`src/agent/apis/collaboration.py\` exposes the account owner's ordinary
