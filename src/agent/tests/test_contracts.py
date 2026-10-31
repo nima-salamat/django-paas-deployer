@@ -219,7 +219,7 @@ class AgentContractTests(TestCase):
             route = route if route.endswith("/") else route
             view_class = getattr(getattr(pattern, "callback", None), "view_class", None)
             self.assertIsNotNone(view_class, str(pattern.pattern))
-            for method in ("GET", "POST", "PATCH", "DELETE"):
+            for method in ("GET", "POST", "PUT", "PATCH", "DELETE"):
                 if method.lower() in view_class.__dict__:
                     self.assertIsNotNone(
                         contract_for(route, method),
