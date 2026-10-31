@@ -93,7 +93,13 @@ def _bounded_body(request) -> bytes | None:
     except (TypeError, ValueError):
         return None
 
-    body = request.body
+    try:
+        # Read at most limit + 1 bytes directly from the request stream. This
+        # avoids Django's generic form-upload size gate while keeping this
+        # machine endpoint strictly bounded.
+        body = request.read(MAX_COMPRESSED_BYTES + 1)
+    except Exception:
+        return None
     if len(body) > MAX_COMPRESSED_BYTES:
         return None
 
@@ -324,17 +330,18 @@ def runtime_logs_ingest_apiview(request):
     dropped_bytes_total = 0
     active_streams = 0
     service_cache = {}
+    missing_service = object()
 
     for (service_id, container_id), records_for_stream in grouped.items():
-        service = service_cache.get(service_id)
-        if service is None:
-            service = (
+        if service_id not in service_cache:
+            service_cache[service_id] = (
                 Service.objects.select_related("plan")
                 .filter(pk=service_id)
                 .first()
+                or missing_service
             )
-            service_cache[service_id] = service
-        if service is None:
+        service = service_cache[service_id]
+        if service is missing_service:
             rejected += len(records_for_stream)
             continue
 
@@ -378,7 +385,9 @@ def runtime_logs_ingest_apiview(request):
 
         try:
             result = ingest_lines(stream, accepted_lines, policy=policy)
-            accepted_total += int(result.get("inserted") or 0)
+            # Count accepted input records, including realtime-only/drop-new
+            # modes where nothing is written to PostgreSQL by policy.
+            accepted_total += len(accepted_lines)
             _publish_batch(
                 service_id,
                 stream.pk,
