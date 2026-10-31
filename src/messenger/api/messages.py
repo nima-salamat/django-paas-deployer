@@ -544,6 +544,8 @@ class MessageReactAPIView(APIView):
         transport_error = reject_plaintext_transport(msg.conversation)
         if transport_error:
             return transport_error
+        if msg.is_scheduled and msg.sender_id != request.user.id:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
         emoji = (request.data.get("emoji") or "").strip()[:32]
         if not emoji:
             return err("emoji required")
@@ -592,6 +594,8 @@ class MessageReactionDeleteAPIView(APIView):
         transport_error = reject_plaintext_transport(msg.conversation)
         if transport_error:
             return transport_error
+        if msg.is_scheduled and msg.sender_id != request.user.id:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
         emoji = (request.data.get("emoji") or "").strip()[:32]
         if not emoji:
             return err("emoji required")
