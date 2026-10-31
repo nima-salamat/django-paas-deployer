@@ -94,6 +94,10 @@ jobs:
         run: |
           pytest -q src/messenger/tests/test_matrix_service_config.py src/messenger/tests/test_security_mode.py -k "encrypted_room or secure_dm_is_parallel or encrypted_group_topics_expose_metadata"
 
+      - name: Agent Messenger and Ticket collaboration tests
+        run: |
+          pytest -q src/agent/tests/test_collaboration.py src/agent/tests/test_contracts.py
+
       - name: Run unit and regression tests
         run: |
           # Unit/regression suite only. Real Docker/Swarm tests are marked
