@@ -568,6 +568,10 @@ class MessageReactAPIView(APIView):
             pass
         return ok(action, data={"emoji": emoji, "action": action})
 
+    def delete(self, request, pk):
+        # The domain route supports explicit, idempotent removal; DELETE never
+        # toggles a reaction on.
+        return MessageReactionDeleteAPIView().delete(request, pk)
 
 
 class MessageReactionDeleteAPIView(APIView):
