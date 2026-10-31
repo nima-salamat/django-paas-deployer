@@ -158,7 +158,7 @@ preflight_matrix_postgres_network() {
 # commands that can start or recreate services. The token is persisted in
 # .env, generated locally, and never printed to the terminal.
 prepare_runtime_log_ingestion() {
-    compose_command=""
+    compose_command=
     for arg in "$@"; do
         case "$arg" in
             up|start|restart|create|run) compose_command=$arg; break ;;
@@ -190,9 +190,7 @@ prepare_runtime_log_ingestion() {
                 next
             }
             { print }
-            END {
-                if (!replaced) print "LOG_INGEST_SHARED_TOKEN=" token
-            }
+            END { if (!replaced) print "LOG_INGEST_SHARED_TOKEN=" token }
         ' .env > "$token_file"
         mv "$token_file" .env
         chmod 600 .env
@@ -207,9 +205,43 @@ prepare_runtime_log_ingestion() {
         *) echo "ERROR: LOG_FORWARD_SOCKET_PATH must be a .sock path under /run." >&2; return 2 ;;
     esac
     LOG_FORWARD_SOCKET_DIR=$(dirname "$LOG_FORWARD_SOCKET_PATH")
+
     LOG_INGEST_NETWORK=$(setting LOG_INGEST_NETWORK)
     : "${LOG_INGEST_NETWORK:=deploy_log_ingest}"
-    printf '%s' "$LOG_INGEST_NETWORK" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}        sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
+    printf '%s' "$LOG_INGEST_NETWORK" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$' || {
+        echo "ERROR: Invalid LOG_INGEST_NETWORK name." >&2
+        return 2
+    }
+    export LOG_FORWARD_SOCKET_PATH LOG_FORWARD_SOCKET_DIR LOG_INGEST_NETWORK
+
+    swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)
+    if [ "$swarm_state" = "active" ]; then
+        expected_driver=overlay
+        if ! docker network inspect "$LOG_INGEST_NETWORK" >/dev/null 2>&1; then
+            docker network create --driver overlay --attachable --internal "$LOG_INGEST_NETWORK" >/dev/null
+        fi
+    else
+        expected_driver=bridge
+        if ! docker network inspect "$LOG_INGEST_NETWORK" >/dev/null 2>&1; then
+            docker network create --driver bridge --internal "$LOG_INGEST_NETWORK" >/dev/null
+        fi
+    fi
+    actual_driver=$(docker network inspect --format '{{.Driver}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
+    is_internal=$(docker network inspect --format '{{.Internal}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
+    if [ "$actual_driver" != "$expected_driver" ] || [ "$is_internal" != "true" ]; then
+        echo "ERROR: $LOG_INGEST_NETWORK must be an internal $expected_driver network (found driver=$actual_driver internal=$is_internal)." >&2
+        return 2
+    fi
+    if [ "$expected_driver" = "overlay" ]; then
+        attachable=$(docker network inspect --format '{{.Attachable}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
+        [ "$attachable" = "true" ] || {
+            echo "ERROR: $LOG_INGEST_NETWORK must be attachable." >&2
+            return 2
+        }
+    fi
+
+    if [ "$(id -u)" -eq 0 ]; then
+        sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
     elif command -v sudo >/dev/null 2>&1; then
         sudo sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
     else
