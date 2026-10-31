@@ -23,6 +23,11 @@ jobs:
           sh -n scripts/prepare-log-node.sh
           sh -n scripts/deploy-log-agents.sh
           sh -n scripts/migrate-runtime-log-driver.sh
+      - name: Validate Docker Compose configurations
+        run: |
+          cp .env.example .env
+          docker compose -f compose.yaml config --quiet
+          docker compose -f compose.yaml -f compose.matrix-postgres.yaml config --quiet
       - name: Compile Python sources
         run: |
           python -m compileall -q src
