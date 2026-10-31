@@ -80,12 +80,15 @@ class AgentContextView(AgentSecuredAPIView):
 
         base = api_base_url(request).rstrip("/")
         caps = AgentCapabilitiesView().get(request).data
+        available_operations = list(caps.pop("operations", []) or [])
         skills = skills_for_agent(request.agent)
         include = {
             item.strip().lower()
             for item in str(request.query_params.get("include") or "").split(",")
             if item.strip()
         }
+        if "operations" in include:
+            caps["operations"] = available_operations
         payload = {
             "result": "success",
             "api_version": "v1",
@@ -93,7 +96,13 @@ class AgentContextView(AgentSecuredAPIView):
                       "scopes": sorted(request.agent.scopes or [])},
             "capabilities": caps,
             "links": {"openapi": f"{base}/openapi.json", "skills": f"{base}/skills",
+                      "capabilities": f"{base}/capabilities",
                       "services": f"{base}/services", "mcp_protocol": MCP_PROTOCOL_VERSION},
+            "discovery": {
+                "available_operations": len(available_operations),
+                "operations_included": "operations" in include,
+                "load_skill_on_demand": True,
+            },
             "skills": [{"name": item.name, "title": item.title, "summary": item.summary,
                         "url": skill_url(base, item)} for item in skills],
             "included": [],
