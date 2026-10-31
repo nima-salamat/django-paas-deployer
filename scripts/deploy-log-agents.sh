@@ -64,7 +64,7 @@ docker inspect deploy-web >/dev/null 2>&1 || {
 
 # The single-node Compose sidecar and the global service cannot bind the same
 # Unix socket at the same time.
-docker compose -f compose.yaml stop log-collector >/dev/null 2>&1 || true
+docker compose --profile runtime-logs -f compose.yaml stop log-collector >/dev/null 2>&1 || true
 
 # Prepare the current manager. Run the same command on every worker node before
 # deploying; /run is node-local and is recreated on reboot.
