@@ -11,6 +11,12 @@ The `logs` app does not own a separate public REST router. Runtime logs are expo
 | Agent | `/agent/v1/services/{service_id}/logs` | Machine-readable runtime log query. |
 | Agent | `/agent/v1/services/{service_id}/logs/export` | Machine-readable log export. |
 
+## Internal ingestion endpoint
+
+The node-local Fluent Bit agent posts gzip-compressed JSON Lines to `POST /services/internal/logs/ingest/`. The handler is implemented in `src/logs/ingest_api.py` and accepts only the installation's `LOG_INGEST_SHARED_TOKEN`; it is not a browser/session API. Each record must contain Docker's container ID and PassDeployer ownership labels before the record is grouped, checked against the Service row and passed to the existing logging policy. Request size and records per batch are bounded.
+
+The full transport lifecycle is documented in [Runtime log transport](../deployments/execution/12-runtime-log-transport.md).
+
 ## Internal boundary
 
 ```mermaid
