@@ -159,7 +159,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
 
         with patch.object(runtime, "assert_active"), \
              patch.object(runtime, "prepare_image", return_value="demo:r1"), \
-             patch.object(runtime, "inspect_service", return_value=SimpleNamespace(service_image="demo:r1")), \
+             patch.object(runtime, "inspect_service", return_value=SimpleNamespace(service_image="demo:r1", update_state=None)), \
              patch.object(runtime, "wait_ready", return_value=SimpleNamespace(replicas_desired=3)), \
              patch.object(runtime, "_create_kwargs", return_value={"name": "demo"}), \
              patch("deployments.core.swarm.compile_compose_service", wraps=compile_compose_service) as compiler:
@@ -195,7 +195,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
 
         with patch.object(runtime, "assert_active"), \
              patch.object(runtime, "prepare_image", return_value="demo:r1"), \
-             patch.object(runtime, "inspect_service", return_value=SimpleNamespace(service_image="demo:r1")), \
+             patch.object(runtime, "inspect_service", return_value=SimpleNamespace(service_image="demo:r1", update_state=None)), \
              patch.object(runtime, "_create_kwargs", return_value={"name": "demo"}):
             runtime.apply(
                 config,
