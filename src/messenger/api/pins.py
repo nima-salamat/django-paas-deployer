@@ -92,6 +92,8 @@ class MessagePinAPIView(APIView):
         transport_error = reject_plaintext_transport(conv)
         if transport_error:
             return transport_error
+        if msg.is_scheduled and msg.sender_id != request.user.id:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
         # Permission check: owner/admin always allowed.
         # In private (direct) chats, every participant can pin.
         # In group chats, non-owner/admin needs explicit can_pin_messages.
@@ -198,7 +200,7 @@ class MessagePinAPIView(APIView):
                     "type": "message.pinned" if pinned else "message.unpinned",
                     "conversation_id": conv.id,
                     "message_id": msg.id,
-                    "pinned_by": request.user.id if pinned else None,
+                    "pinned_by": request.user.id,
                     "pinned_message_ids": pin_ids,
                 })
             except Exception:
