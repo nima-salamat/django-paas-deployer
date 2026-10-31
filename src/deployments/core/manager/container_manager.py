@@ -174,11 +174,14 @@ class Container(Client):
         can apply progressive fallbacks when a specific Docker engine
         version rejects one of the options.
         """
+        from deployments.common.runtime_logging import docker_log_config
+
         kwargs: dict[str, Any] = {
             "binds": self.volumes or None,
             "port_bindings": self.port_bindings or None,
             "read_only": self.read_only,
             "restart_policy": self.restart_policy,
+            "log_config": docker_log_config(),
         }
 
         # CPU limit.  Docker accepts EITHER ``cpu_period`` + ``cpu_quota``
