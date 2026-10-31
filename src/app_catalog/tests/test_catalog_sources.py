@@ -295,7 +295,7 @@ networks:
         # Variables belong to the shell/container runtime, not catalog template
         # interpolation, and must survive byte-for-byte through resolution.
         self.assertIn("${WORDPRESS_ROOT:-/var/www/html}", script)
-        self.assertIn("${PATH:+$PATH}", script)
+        self.assertIn("${PATH:+:$PATH}", script)
         self.assertIn("${WORDPRESS_AUTO_INSTALL:-1}", script)
         self.assertEqual(
             wordpress["command"],
