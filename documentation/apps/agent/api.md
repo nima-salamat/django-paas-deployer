@@ -332,6 +332,9 @@ membership, block, posting, validation, cache and event rules.
 | Scheduled messages | \`GET /agent/v1/messenger/conversations/{conversation_id}/scheduled\` | \`messenger.messages.read\` |
 | Mark conversation read | \`POST /agent/v1/messenger/conversations/{conversation_id}/read\` | \`messenger.messages.read_state.write\` |
 | React/edit/delete | \`POST .../messages/{message_id}/react\`, \`PATCH .../edit\`, \`DELETE .../messages/{message_id}\` | \`messenger.messages.react/edit/delete\` |
+| Remove own reaction | DELETE /agent/v1/messenger/messages/{message_id}/react with emoji in JSON body | messenger.messages.reactions.remove |
+| Pin/unpin a message | PUT/DELETE /agent/v1/messenger/messages/{message_id}/pin | messenger.messages.pin/unpin |
+| List pinned messages | GET /agent/v1/messenger/conversations/{conversation_id}/pinned-messages | messenger.messages.pinned.read |
 | Schedule cancellation | \`POST /agent/v1/messenger/messages/{message_id}/cancel-schedule\` | \`messenger.messages.schedule\` |
 | Search/join public groups | \`GET /agent/v1/messenger/groups/search\`, \`POST .../groups/{conversation_id}/join\` | \`messenger.groups.search/join\` |
 | Members and permissions | \`GET .../participants\`, \`POST .../members\`, \`DELETE .../members/{user_id}\`, \`POST .../role\`, \`PATCH .../permissions\` | \`messenger.members.read/manage\`, \`messenger.permissions.manage\` |
@@ -353,8 +356,15 @@ text rather than HTML tags or assumed Markdown styling. Message creation support
 sends require both messenger.messages.send and
 messenger.messages.schedule; ordinary sends need only the send scope.
 
-Invite codes are accepted in the JSON body, never in the URL. Forwarding
-requires all three listed scopes. The Agent also enforces the source
+Reaction DELETE removes only the requesting Agent user's selected emoji and
+is idempotent; it cannot remove another participant's reaction. Pinning and
+unpinning use explicit PUT and DELETE operations instead of toggle semantics,
+so retries cannot unexpectedly reverse the pin state. Group pin permission
+uses the Messenger member's can_pin_messages flag or the owner/admin role.
+The pinned-message list requires active membership, excludes undelivered
+scheduled messages, and respects restricted group history visibility.
+
+Invite codes are accepted in the JSON body, never in the URL. Forwardingrequires all three listed scopes. The Agent also enforces the source
 conversation's history visibility, scheduled-message sender restriction, and
 the target conversation's active membership, open state, can-send permission,
 admin-only posting mode and media permission for attachments. The existing
