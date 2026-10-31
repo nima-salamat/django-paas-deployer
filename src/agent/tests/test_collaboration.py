@@ -65,6 +65,10 @@ class AgentCollaborationContractTests(TestCase):
             ("GET", "/agent/v1/messenger/me/join-requests"),
             ("DELETE", "/agent/v1/messenger/join-requests/{request_id}"),
             ("POST", "/agent/v1/messenger/messages/{message_id}/forward"),
+            ("DELETE", "/agent/v1/messenger/messages/{message_id}/react"),
+            ("PUT", "/agent/v1/messenger/messages/{message_id}/pin"),
+            ("DELETE", "/agent/v1/messenger/messages/{message_id}/pin"),
+            ("GET", "/agent/v1/messenger/conversations/{conversation_id}/pinned-messages"),
             ("GET", "/agent/v1/messenger/conversations/{conversation_id}/messages"),
             ("POST", "/agent/v1/messenger/conversations/{conversation_id}/messages"),
             ("PATCH", "/agent/v1/messenger/conversations/{conversation_id}/members/{user_id}/permissions"),
@@ -213,6 +217,195 @@ class AgentCollaborationContractTests(TestCase):
                 conversation=target,
                 forwarded_from_message=message,
             ).exists()
+        )
+
+    def test_reaction_delete_removes_only_the_agent_users_reaction(self):
+        from messenger.models import Message, MessageReaction
+
+        self.agent.scopes = ["messenger.messages.reactions.remove"]
+        self.agent.save(update_fields=["scopes", "updated_at"])
+        other = get_user_model().objects.create_user(
+            username="reaction-owner",
+            email="reaction-owner@example.com",
+            password="test-password",
+        )
+        conv = Conversation.objects.create(
+            type=Conversation.Type.PRIVATE,
+            created_by=self.user,
+        )
+        ConversationParticipant.objects.create(
+            conversation=conv,
+            user=self.user,
+            role=ConversationParticipant.Role.OWNER,
+        )
+        ConversationParticipant.objects.create(
+            conversation=conv,
+            user=other,
+            role=ConversationParticipant.Role.MEMBER,
+        )
+        message = Message.objects.create(
+            conversation=conv,
+            sender=other,
+            body="React to this",
+        )
+        own_reaction = MessageReaction.objects.create(
+            message=message, user=self.user, emoji="👍"
+        )
+        other_reaction = MessageReaction.objects.create(
+            message=message, user=other, emoji="👍"
+        )
+
+        response = self.client.delete(
+            f"/agent/v1/messenger/messages/{message.pk}/react",
+            {"emoji": "👍"},
+            format="json",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["data"]["action"], "removed")
+        self.assertFalse(MessageReaction.objects.filter(pk=own_reaction.pk).exists())
+        self.assertTrue(MessageReaction.objects.filter(pk=other_reaction.pk).exists())
+
+        # DELETE is idempotent: repeating it must not create a new reaction.
+        response = self.client.delete(
+            f"/agent/v1/messenger/messages/{message.pk}/react",
+            {"emoji": "👍"},
+            format="json",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["data"]["action"], "unchanged")
+        self.assertEqual(MessageReaction.objects.filter(message=message).count(), 1)
+
+    def test_message_pin_unpin_and_pinned_list(self):
+        from messenger.models import Message, PinnedMessage
+
+        self.agent.scopes = [
+            "messenger.messages.pin",
+            "messenger.messages.unpin",
+            "messenger.messages.pinned.read",
+        ]
+        self.agent.save(update_fields=["scopes", "updated_at"])
+
+        owner = get_user_model().objects.create_user(
+            username="pin-group-owner",
+            email="pin-group-owner@example.com",
+            password="test-password",
+        )
+        conv = Conversation.objects.create(
+            type=Conversation.Type.GROUP,
+            title="Pinned messages test",
+            created_by=owner,
+            history_visibility=Conversation.HistoryVisibility.FROM_JOIN,
+        )
+        ConversationParticipant.objects.create(
+            conversation=conv,
+            user=owner,
+            role=ConversationParticipant.Role.OWNER,
+        )
+        member = ConversationParticipant.objects.create(
+            conversation=conv,
+            user=self.user,
+            role=ConversationParticipant.Role.MEMBER,
+            can_pin_messages=False,
+        )
+        message = Message.objects.create(
+            conversation=conv,
+            sender=owner,
+            body="Important pinned message",
+        )
+
+        response = self.client.put(
+            f"/agent/v1/messenger/messages/{message.pk}/pin",
+            {},
+            format="json",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(PinnedMessage.objects.filter(message=message).exists())
+
+        member.can_pin_messages = True
+        member.save(update_fields=["can_pin_messages"])
+        response = self.client.put(
+            f"/agent/v1/messenger/messages/{message.pk}/pin",
+            {},
+            format="json",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["data"]["pinned"])
+        self.assertTrue(PinnedMessage.objects.filter(message=message).exists())
+
+        # PUT is idempotent and leaves the message pinned on retry.
+        response = self.client.put(
+            f"/agent/v1/messenger/messages/{message.pk}/pin",
+            {},
+            format="json",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["data"]["changed"])
+        self.assertEqual(PinnedMessage.objects.filter(conversation=conv).count(), 1)
+
+        response = self.client.get(
+            f"/agent/v1/messenger/conversations/{conv.pk}/pinned-messages",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["data"]), 1)
+        self.assertEqual(response.data["data"][0]["message"]["id"], message.pk)
+
+        response = self.client.delete(
+            f"/agent/v1/messenger/messages/{message.pk}/pin",
+            {},
+            format="json",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["data"]["pinned"])
+        self.assertFalse(PinnedMessage.objects.filter(message=message).exists())
+
+        response = self.client.get(
+            f"/agent/v1/messenger/conversations/{conv.pk}/pinned-messages",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["data"], [])
+
+    def test_reaction_pin_and_pinned_read_have_independent_scopes(self):
+        expected = {
+            ("DELETE", "/agent/v1/messenger/messages/{message_id}/react"): (
+                "messenger.messages.reactions.remove",
+            ),
+            ("PUT", "/agent/v1/messenger/messages/{message_id}/pin"): (
+                "messenger.messages.pin",
+            ),
+            ("DELETE", "/agent/v1/messenger/messages/{message_id}/pin"): (
+                "messenger.messages.unpin",
+            ),
+            ("GET", "/agent/v1/messenger/conversations/{conversation_id}/pinned-messages"): (
+                "messenger.messages.pinned.read",
+            ),
+        }
+        for (method, path), scopes in expected.items():
+            contract = contract_for(path, method)
+            self.assertIsNotNone(contract, (method, path))
+            self.assertEqual(contract.scopes, scopes)
+        all_scopes = {scope for scopes in expected.values() for scope in scopes}
+        self.assertTrue(all_scopes.issubset(set(validate_scopes(all_scopes))))
+
+        self.agent.scopes = []
+        self.agent.save(update_fields=["scopes", "updated_at"])
+        response = self.client.delete(
+            "/agent/v1/messenger/messages/999/react",
+            {"emoji": "👍"},
+            format="json",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn(
+            "messenger.messages.reactions.remove",
+            response.data["missing_scopes"],
         )
 
     def test_encrypted_conversations_are_excluded_from_agent_chat_list(self):
