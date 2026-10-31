@@ -1,4 +1,4 @@
-"""Shared, operator-controlled Docker runtime log transport configuration.
+""""Shared, operator-controlled Docker runtime log transport configuration.
 
 Application containers never connect to the Django database or Redis directly.
 Docker forwards their stdout/stderr to the local Fluent Bit Unix socket; Fluent
@@ -41,9 +41,11 @@ def fluentd_log_driver_options() -> dict[str, str]:
     return {
         "fluentd-address": f"unix://{socket_path}",
         "fluentd-async": "true",
-        "fluentd-async-reconnect-interval": "1000",
+        # Docker 29 parses this as a Go duration, not a bare millisecond count.
+        "fluentd-async-reconnect-interval": "1s",
         "fluentd-buffer-limit": str(record_limit),
-        "fluentd-max-retries": "4294967295",
+        # Moby's fluentd driver rejects values greater than math.MaxInt32.
+        "fluentd-max-retries": "2147483647",
         "fluentd-sub-second-precision": "true",
         "labels": ",".join(
             (
@@ -59,7 +61,6 @@ def fluentd_log_driver_options() -> dict[str, str]:
         "mode": "non-blocking",
         "max-buffer-size": buffer_size,
     }
-
 
 
 __all__ = [
