@@ -222,7 +222,10 @@ class AgentCollaborationContractTests(TestCase):
     def test_reaction_delete_removes_only_the_agent_users_reaction(self):
         from messenger.models import Message, MessageReaction
 
-        self.agent.scopes = ["messenger.messages.reactions.remove"]
+        self.agent.scopes = [
+            "messenger.messages.react",
+            "messenger.messages.reactions.remove",
+        ]
         self.agent.save(update_fields=["scopes", "updated_at"])
         other = get_user_model().objects.create_user(
             username="reaction-owner",
@@ -248,11 +251,20 @@ class AgentCollaborationContractTests(TestCase):
             sender=other,
             body="React to this",
         )
-        own_reaction = MessageReaction.objects.create(
-            message=message, user=self.user, emoji="👍"
-        )
         other_reaction = MessageReaction.objects.create(
             message=message, user=other, emoji="👍"
+        )
+
+        response = self.client.post(
+            f"/agent/v1/messenger/messages/{message.pk}/react",
+            {"emoji": "👍"},
+            format="json",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["data"]["action"], "added")
+        own_reaction = MessageReaction.objects.get(
+            message=message, user=self.user, emoji="👍"
         )
 
         response = self.client.delete(
@@ -374,6 +386,9 @@ class AgentCollaborationContractTests(TestCase):
 
     def test_reaction_pin_and_pinned_read_have_independent_scopes(self):
         expected = {
+            ("POST", "/agent/v1/messenger/messages/{message_id}/react"): (
+                "messenger.messages.react",
+            ),
             ("DELETE", "/agent/v1/messenger/messages/{message_id}/react"): (
                 "messenger.messages.reactions.remove",
             ),
@@ -407,6 +422,15 @@ class AgentCollaborationContractTests(TestCase):
             "messenger.messages.reactions.remove",
             response.data["missing_scopes"],
         )
+
+        response = self.client.post(
+            "/agent/v1/messenger/messages/999/react",
+            {"emoji": "👍"},
+            format="json",
+            **self.auth(),
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("messenger.messages.react", response.data["missing_scopes"])
 
         response = self.client.put(
             "/agent/v1/messenger/messages/999/pin",
