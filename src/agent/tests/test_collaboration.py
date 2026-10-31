@@ -260,10 +260,12 @@ class AgentCollaborationContractTests(TestCase):
             "client_message_id": client_message_id,
         }
 
-        response = self.client.post(
+        request_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        response = self.client.generic(
+            "POST",
             url,
-            payload,
-            format="json",
+            data=request_bytes,
+            content_type="application/json; charset=utf-8",
             HTTP_IDEMPOTENCY_KEY=idempotency_key,
             **self.auth(),
         )
@@ -287,10 +289,11 @@ class AgentCollaborationContractTests(TestCase):
 
         # The Agent idempotency replay path stores/reloads the response via
         # JSONField and must preserve the exact Persian text too.
-        replay = self.client.post(
+        replay = self.client.generic(
+            "POST",
             url,
-            payload,
-            format="json",
+            data=request_bytes,
+            content_type="application/json; charset=utf-8",
             HTTP_IDEMPOTENCY_KEY=idempotency_key,
             **self.auth(),
         )
@@ -317,10 +320,14 @@ class AgentCollaborationContractTests(TestCase):
         # Unicode emoji reactions must also survive request parsing, DB storage
         # and response rendering byte-for-byte.
         reaction_url = f"/agent/v1/messenger/messages/{stored.pk}/react"
-        reaction = self.client.post(
+        reaction_bytes = json.dumps(
+            {"emoji": "❤️"}, ensure_ascii=False
+        ).encode("utf-8")
+        reaction = self.client.generic(
+            "POST",
             reaction_url,
-            {"emoji": "❤️"},
-            format="json",
+            data=reaction_bytes,
+            content_type="application/json; charset=utf-8",
             **self.auth(),
         )
         self.assertEqual(reaction.status_code, 200)
@@ -338,10 +345,11 @@ class AgentCollaborationContractTests(TestCase):
             "❤️",
         )
 
-        removed = self.client.delete(
+        removed = self.client.generic(
+            "DELETE",
             reaction_url,
-            {"emoji": "❤️"},
-            format="json",
+            data=reaction_bytes,
+            content_type="application/json; charset=utf-8",
             **self.auth(),
         )
         self.assertEqual(removed.status_code, 200)
