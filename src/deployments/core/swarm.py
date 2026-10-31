@@ -1238,27 +1238,70 @@ class SwarmRuntime:
         )
 
     def _service_logs_for_failure(self, name: str, *, tail: int = 200) -> str:
-        """Best-effort collection of the failing Swarm service stdout/stderr."""
+        """Best-effort failure logs from Docker or the persistent Fluent Bit store."""
+        service = None
+        labels = {}
         try:
             service = self.client.services.get(_validate_service_name(name))
-            raw_logs = service.logs(
-                stdout=True,
-                stderr=True,
-                timestamps=True,
-                tail=tail,
+            attrs = service.attrs or {}
+            spec = attrs.get("Spec") or {}
+            labels = dict(spec.get("Labels") or {})
+            task_template = spec.get("TaskTemplate") or {}
+            log_driver = dict(task_template.get("LogDriver") or {})
+            if str(log_driver.get("Name") or "").lower() != "fluentd":
+                raw_logs = service.logs(
+                    stdout=True,
+                    stderr=True,
+                    timestamps=True,
+                    tail=tail,
+                )
+                if isinstance(raw_logs, bytes):
+                    return raw_logs.decode("utf-8", errors="replace")
+                if raw_logs:
+                    return "".join(
+                        chunk.decode("utf-8", errors="replace")
+                        if isinstance(chunk, bytes)
+                        else str(chunk)
+                        for chunk in raw_logs
+                    )
+        except Exception as exc:
+            logger.debug(
+                "Native Swarm service log retrieval unavailable for %s: %s",
+                name,
+                exc,
             )
-            if isinstance(raw_logs, bytes):
-                return raw_logs.decode("utf-8", errors="replace")
-            if not raw_logs:
-                return ""
+
+        # Docker's Service.logs API only supports json-file/journald. With the
+        # Fluentd driver, the durable log database is the canonical source.
+        service_id = str(labels.get("passdeployer.service") or "").strip()
+        if not service_id:
+            return ""
+        try:
+            from django.conf import settings
+            from logs.models import ServiceLogEntry
+
+            alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", None) or "default"
+            query = ServiceLogEntry.objects.using(alias).filter(service_id=service_id)
+            deployment_id = str(labels.get("passdeployer.deployment") or "").strip()
+            if deployment_id:
+                query = query.filter(deploy_id=deployment_id)
+            rows = list(
+                query.order_by("-ts", "-id")
+                .values("ts", "stream", "message")[: max(1, min(int(tail), 1000))]
+            )
+            rows.reverse()
             return "".join(
-                chunk.decode("utf-8", errors="replace")
-                if isinstance(chunk, bytes)
-                else str(chunk)
-                for chunk in raw_logs
+                f"{row['ts'].isoformat() if row.get('ts') else ''} "
+                f"[{row.get('stream') or 'stdout'}] {row.get('message') or ''}\n"
+                for row in rows
             )
         except Exception as exc:
-            return f"<unable to collect Swarm service logs: {exc}>"
+            logger.debug(
+                "Persistent log lookup failed for Swarm service %s: %s",
+                name,
+                exc,
+            )
+            return ""
 
     def _task_logs_for_failure(self, task: SwarmTaskState, *, tail: int = 200) -> str:
         """Read logs from the exact failed task container, not other service generations."""
