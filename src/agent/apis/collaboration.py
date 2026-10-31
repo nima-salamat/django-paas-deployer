@@ -82,11 +82,11 @@ def _owned_ticket(request, ticket_id):
     return ticket, None
 
 
-class AgentMessengerView(AgentMessengerView):
+class AgentMessengerView(AgentSecuredAPIView):
     audit_resource_type = "messenger"
 
 
-class AgentTicketView(AgentMessengerView):
+class AgentTicketView(AgentSecuredAPIView):
     audit_resource_type = "ticket"
 
 
