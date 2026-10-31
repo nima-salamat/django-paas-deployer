@@ -783,10 +783,16 @@ def begin_idempotency(agent, request):
     rh = stable_json_hash(payload | {"method": request.method, "path": request.path})
     now = timezone.now()
     try:
-        row = AgentIdempotencyRecord.objects.create(
-            agent=agent, key=key, method=request.method, path=request.path, request_hash=rh,
-            state="processing", expires_at=now + timedelta(hours=24),
-        )
+        # Isolate the unique-key insert in a savepoint. Agent API requests may
+        # already be wrapped in ATOMIC_REQUESTS; catching IntegrityError from
+        # an insert directly in that outer transaction leaves it marked as
+        # broken, so the replay lookup below would itself raise
+        # TransactionManagementError instead of returning the saved response.
+        with transaction.atomic():
+            row = AgentIdempotencyRecord.objects.create(
+                agent=agent, key=key, method=request.method, path=request.path, request_hash=rh,
+                state="processing", expires_at=now + timedelta(hours=24),
+            )
         return row, None
     except IntegrityError:
         row = AgentIdempotencyRecord.objects.filter(agent=agent, key=key, expires_at__gt=now).first()
