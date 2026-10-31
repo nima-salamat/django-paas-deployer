@@ -166,28 +166,77 @@ prepare_runtime_log_ingestion() {
     done
     [ -n "$compose_command" ] || return 0
 
-    LOG_INGEST_ENABLED=$(setting LOG_INGEST_ENABLED)
-    : "${LOG_INGEST_ENABLED:=1}"
-    case "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" in
-        1|true|yes|on)
-            case ",${COMPOSE_PROFILES:-}," in
-                *,runtime-logs,*) ;;
-                ,,) COMPOSE_PROFILES=runtime-logs ;;
-                *) COMPOSE_PROFILES="${COMPOSE_PROFILES},runtime-logs" ;;
-            esac
-            export COMPOSE_PROFILES
-            ;;
-        *)
-            # No host socket, token, network, or collector is created when
-            # runtime log ingestion is deliberately disabled.
-            return 0
-            ;;
-    esac
-
     [ -f .env ] || {
         echo "ERROR: .env is required. Copy .env.example to .env first." >&2
         return 2
     }
+
+    LOG_INGEST_ENABLED=$(setting LOG_INGEST_ENABLED)
+    : "${LOG_INGEST_ENABLED:=1}"
+    SWARM_ENABLED=$(setting SWARM_ENABLED)
+    : "${SWARM_ENABLED:=1}"
+    swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)
+    case "$(printf '%s' "$SWARM_ENABLED" | tr '[:upper:]' '[:lower:]'):$swarm_state" in
+        1:active|true:active|yes:active|on:active)
+            runtime_mode=swarm
+            profile=runtime-logs
+            expected_driver=overlay
+            ;;
+        *)
+            runtime_mode=docker
+            profile=docker-logs
+            if [ "$swarm_state" = "active" ]; then expected_driver=overlay; else expected_driver=bridge; fi
+            ;;
+    esac
+
+    if [ "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" = "1" ] ||
+       [ "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" = "true" ] ||
+       [ "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" = "yes" ] ||
+       [ "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" = "on" ]; then
+        case ",${COMPOSE_PROFILES:-}," in
+            *,${profile},*) ;;
+            ,,) COMPOSE_PROFILES=$profile ;;
+            *) COMPOSE_PROFILES="${COMPOSE_PROFILES},${profile}" ;;
+        esac
+        export COMPOSE_PROFILES
+    fi
+
+    LOG_INGEST_NETWORK=$(setting LOG_INGEST_NETWORK)
+    : "${LOG_INGEST_NETWORK:=deploy_log_ingest}"
+    printf '%s' "$LOG_INGEST_NETWORK" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$' || {
+        echo "ERROR: Invalid LOG_INGEST_NETWORK name." >&2
+        return 2
+    }
+    export LOG_INGEST_NETWORK
+
+    if ! docker network inspect "$LOG_INGEST_NETWORK" >/dev/null 2>&1; then
+        if [ "$expected_driver" = "overlay" ]; then
+            docker network create --driver overlay --attachable --internal "$LOG_INGEST_NETWORK" >/dev/null
+        else
+            docker network create --driver bridge --internal "$LOG_INGEST_NETWORK" >/dev/null
+        fi
+    fi
+    actual_driver=$(docker network inspect --format '{{.Driver}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
+    is_internal=$(docker network inspect --format '{{.Internal}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
+    if [ "$actual_driver" != "$expected_driver" ] || [ "$is_internal" != "true" ]; then
+        echo "ERROR: $LOG_INGEST_NETWORK must be an internal $expected_driver network (found driver=$actual_driver internal=$is_internal)." >&2
+        return 2
+    fi
+    if [ "$expected_driver" = "overlay" ]; then
+        attachable=$(docker network inspect --format '{{.Attachable}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
+        [ "$attachable" = "true" ] || {
+            echo "ERROR: $LOG_INGEST_NETWORK must be attachable." >&2
+            return 2
+        }
+    fi
+
+    # The legacy Docker collector uses Docker's json-file API and needs no
+    # extra token/socket. Fluent Bit is required only for Swarm workloads.
+    [ "$runtime_mode" = "swarm" ] || return 0
+    case "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) ;;
+        *) return 0 ;;
+    esac
 
     LOG_INGEST_SHARED_TOKEN=$(setting LOG_INGEST_SHARED_TOKEN)
     if [ -z "$LOG_INGEST_SHARED_TOKEN" ]; then
@@ -203,7 +252,7 @@ prepare_runtime_log_ingestion() {
         token_file=$(mktemp)
         awk -v token="$LOG_INGEST_SHARED_TOKEN" '
             /^LOG_INGEST_SHARED_TOKEN=/ {
-                print "LOG_INGEST_SHARED_TOKEN=" token
+                if (!replaced) print "LOG_INGEST_SHARED_TOKEN=" token
                 replaced = 1
                 next
             }
@@ -223,40 +272,7 @@ prepare_runtime_log_ingestion() {
         *) echo "ERROR: LOG_FORWARD_SOCKET_PATH must be a .sock path under /run." >&2; return 2 ;;
     esac
     LOG_FORWARD_SOCKET_DIR=$(dirname "$LOG_FORWARD_SOCKET_PATH")
-
-    LOG_INGEST_NETWORK=$(setting LOG_INGEST_NETWORK)
-    : "${LOG_INGEST_NETWORK:=deploy_log_ingest}"
-    printf '%s' "$LOG_INGEST_NETWORK" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$' || {
-        echo "ERROR: Invalid LOG_INGEST_NETWORK name." >&2
-        return 2
-    }
-    export LOG_FORWARD_SOCKET_PATH LOG_FORWARD_SOCKET_DIR LOG_INGEST_NETWORK
-
-    swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)
-    if [ "$swarm_state" = "active" ]; then
-        expected_driver=overlay
-        if ! docker network inspect "$LOG_INGEST_NETWORK" >/dev/null 2>&1; then
-            docker network create --driver overlay --attachable --internal "$LOG_INGEST_NETWORK" >/dev/null
-        fi
-    else
-        expected_driver=bridge
-        if ! docker network inspect "$LOG_INGEST_NETWORK" >/dev/null 2>&1; then
-            docker network create --driver bridge --internal "$LOG_INGEST_NETWORK" >/dev/null
-        fi
-    fi
-    actual_driver=$(docker network inspect --format '{{.Driver}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
-    is_internal=$(docker network inspect --format '{{.Internal}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
-    if [ "$actual_driver" != "$expected_driver" ] || [ "$is_internal" != "true" ]; then
-        echo "ERROR: $LOG_INGEST_NETWORK must be an internal $expected_driver network (found driver=$actual_driver internal=$is_internal)." >&2
-        return 2
-    fi
-    if [ "$expected_driver" = "overlay" ]; then
-        attachable=$(docker network inspect --format '{{.Attachable}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
-        [ "$attachable" = "true" ] || {
-            echo "ERROR: $LOG_INGEST_NETWORK must be attachable." >&2
-            return 2
-        }
-    fi
+    export LOG_FORWARD_SOCKET_PATH LOG_FORWARD_SOCKET_DIR
 
     if [ "$(id -u)" -eq 0 ]; then
         sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
