@@ -56,15 +56,6 @@ services:
     networks:
       - matrix-network
 
-  log-collector:
-    depends_on:
-      db:
-        required: false
-      deployment-log-db:
-        required: false
-    networks:
-      - matrix-network
-
   integration-test:
     depends_on:
       db:
