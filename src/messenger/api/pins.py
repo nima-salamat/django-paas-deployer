@@ -134,6 +134,86 @@ class MessagePinAPIView(APIView):
         )
 
 
+    def put(self, request, pk):
+        """Ensure a message is pinned; this endpoint is idempotent."""
+        msg = get_object_or_404(Message, pk=pk, is_deleted=False)
+        conv = msg.conversation
+        part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not part:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
+        if msg.is_scheduled and msg.sender_id != request.user.id:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        if conv.type != Conversation.Type.PRIVATE:
+            if part.role not in ("owner", "admin") and not part.can_pin_messages:
+                return err("You don't have permission to pin messages", status.HTTP_403_FORBIDDEN)
+
+        _, created = PinnedMessage.objects.get_or_create(
+            conversation=conv,
+            message=msg,
+            defaults={"pinned_by": request.user},
+        )
+        return self._explicit_pin_response(request, msg, pinned=True, changed=created)
+
+    def delete(self, request, pk):
+        """Ensure a message is unpinned; this endpoint is idempotent."""
+        msg = get_object_or_404(Message, pk=pk, is_deleted=False)
+        conv = msg.conversation
+        part = ConversationParticipant.objects.filter(
+            conversation=conv, user=request.user, left_at__isnull=True
+        ).first()
+        if not part:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        transport_error = reject_plaintext_transport(conv)
+        if transport_error:
+            return transport_error
+        if msg.is_scheduled and msg.sender_id != request.user.id:
+            return err("Forbidden", status.HTTP_403_FORBIDDEN)
+        if conv.type != Conversation.Type.PRIVATE:
+            if part.role not in ("owner", "admin") and not part.can_pin_messages:
+                return err("You don't have permission to unpin messages", status.HTTP_403_FORBIDDEN)
+
+        deleted, _ = PinnedMessage.objects.filter(
+            conversation=conv, message=msg
+        ).delete()
+        return self._explicit_pin_response(
+            request, msg, pinned=False, changed=bool(deleted)
+        )
+
+    def _explicit_pin_response(self, request, msg, *, pinned, changed):
+        conv = msg.conversation
+        pin_ids = list(
+            PinnedMessage.objects.filter(conversation=conv)
+            .order_by("-pinned_at")
+            .values_list("message_id", flat=True)
+        )
+        if changed:
+            try:
+                from ..consumers import broadcast_pin
+                broadcast_pin(conv.id, {
+                    "type": "message.pinned" if pinned else "message.unpinned",
+                    "conversation_id": conv.id,
+                    "message_id": msg.id,
+                    "pinned_by": request.user.id if pinned else None,
+                    "pinned_message_ids": pin_ids,
+                })
+            except Exception:
+                logger.exception("message pin broadcast failed conv=%s", conv.id)
+        return ok(
+            "Pinned" if pinned else "Unpinned",
+            data={
+                "pinned": pinned,
+                "changed": changed,
+                "message_id": msg.id,
+                "pinned_message_ids": pin_ids,
+            },
+        )
+
+
 class ConversationPinnedMessagesAPIView(APIView):
     """List all pinned messages for a conversation (newest-pinned-first).
 
@@ -146,18 +226,29 @@ class ConversationPinnedMessagesAPIView(APIView):
 
     def get(self, request, pk):
         conv = get_object_or_404(Conversation, pk=pk)
-        if not ConversationParticipant.objects.filter(
+        part = ConversationParticipant.objects.filter(
             conversation=conv, user=request.user, left_at__isnull=True
-        ).exists():
+        ).first()
+        if not part:
             return err("Forbidden", status.HTTP_403_FORBIDDEN)
         transport_error = reject_plaintext_transport(conv)
         if transport_error:
             return transport_error
         pins = (
             PinnedMessage.objects.filter(conversation=conv, message__is_deleted=False)
+            .filter(Q(message__is_scheduled=False) | Q(message__is_scheduled=True, message__sender=request.user))
             .select_related("message", "message__sender", "pinned_by")
             .order_by("-pinned_at")
         )
+        # Keep pinned-message visibility consistent with the normal history
+        # endpoint: restricted groups never expose pre-join messages to members.
+        if (
+            conv.type == Conversation.Type.GROUP
+            and part.role not in ("owner", "admin")
+            and conv.history_visibility in ("none", "from_join")
+            and part.joined_at
+        ):
+            pins = pins.filter(message__created_at__gte=part.joined_at)
         data = [
             {
                 "id": p.id,
