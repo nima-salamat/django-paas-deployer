@@ -166,6 +166,24 @@ prepare_runtime_log_ingestion() {
     done
     [ -n "$compose_command" ] || return 0
 
+    LOG_INGEST_ENABLED=$(setting LOG_INGEST_ENABLED)
+    : "${LOG_INGEST_ENABLED:=1}"
+    case "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on)
+            case ",${COMPOSE_PROFILES:-}," in
+                *,runtime-logs,*) ;;
+                ,,) COMPOSE_PROFILES=runtime-logs ;;
+                *) COMPOSE_PROFILES="${COMPOSE_PROFILES},runtime-logs" ;;
+            esac
+            export COMPOSE_PROFILES
+            ;;
+        *)
+            # No host socket, token, network, or collector is created when
+            # runtime log ingestion is deliberately disabled.
+            return 0
+            ;;
+    esac
+
     [ -f .env ] || {
         echo "ERROR: .env is required. Copy .env.example to .env first." >&2
         return 2
