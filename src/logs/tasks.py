@@ -17,19 +17,24 @@ def retain_all_services():
     alias = getattr(settings, "DEPLOYMENT_LOG_DB_ALIAS", "default")
     total = 0
     scanned = 0
-    service_ids = (
-        ServiceLogUsage.objects.using(alias)
-        .order_by("service_id")
-        .values_list("service_id", flat=True)
-        .iterator(chunk_size=200)
-    )
-    for sid in service_ids:
-        scanned += 1
-        try:
-            result = retain_service(sid)
-            total += int(result.get("deleted") or 0)
-        except Exception:
-            logger.exception("retain failed service=%s", sid)
+    after_service_id = None
+    while True:
+        qs = ServiceLogUsage.objects.using(alias).order_by("service_id")
+        if after_service_id is not None:
+            qs = qs.filter(service_id__gt=after_service_id)
+        batch = list(qs.values_list("service_id", flat=True)[:200])
+        if not batch:
+            break
+
+        for sid in batch:
+            scanned += 1
+            try:
+                result = retain_service(sid)
+                total += int(result.get("deleted") or 0)
+            except Exception:
+                logger.exception("retain failed service=%s", sid)
+        after_service_id = batch[-1]
+
     return {"deleted": total, "services_scanned": scanned}
 
 
