@@ -381,6 +381,8 @@ granted by default.
 Send a text message as JSON to
 /agent/v1/messenger/conversations/{conversation_id}/messages:
 
+Use `Content-Type: application/json; charset=utf-8; charset=utf-8`. The Agent Messenger send and reaction endpoints reject JSON requests that declare a non-UTF-8 charset rather than silently decoding Persian text incorrectly.
+
 ~~~json
 {
   "body": "سلام، پیام اول.\nاین خط دوم همان پیام است.",
@@ -402,6 +404,26 @@ scheduled_for as a future ISO-8601 datetime with an explicit timezone;
 scheduling requires both messenger.messages.send and
 messenger.messages.schedule. Attachments require multipart/form-data,
 the participant's media permission and no more than 10 files.
+
+
+
+For client code, use a real UTF-8 JSON encoder instead of constructing JSON bytes manually:
+
+~~~python
+payload = {
+    "body": "سلام دنیا 👋\\nپیام دوم",
+    "client_message_id": "agent-unique-id",
+}
+response = requests.post(
+    url,
+    json=payload,
+    headers={"Authorization": f"Bearer {agent_token}",
+             "Content-Type": "application/json; charset=utf-8"},
+)
+data = response.json()
+~~~
+
+JavaScript clients should use `JSON.stringify(payload)` with the same Content-Type. Do not encode Persian text as ASCII/Latin-1 or use replacement decoding. Read responses using the JSON decoder or decode response bytes as UTF-8. If a response already contains literal question marks, the original characters were lost before or during request encoding; the API cannot reconstruct them, so correct the sender and resend the original text.
 
 #### Reaction payload contract
 
