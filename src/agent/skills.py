@@ -933,7 +933,7 @@ when a dedicated configuration endpoint exists.
     _skill(
         "messenger",
         "Messenger",
-        "Search users and groups, manage standard chats, read and send messages, schedule delivery, and manage group membership.",
+        "Search contacts and groups, manage standard chats, invite members, handle join requests, forward messages, and administer conversations.",
         """
 # Messenger — standard chats only
 
@@ -964,6 +964,7 @@ user's visibility. A successful DM response includes the conversation id.
 - POST {{base}}/messenger/messages/{message_id}/react
 - PATCH {{base}}/messenger/messages/{message_id}/edit
 - DELETE {{base}}/messenger/messages/{message_id}
+- POST {{base}}/messenger/messages/{message_id}/forward with conversation_id
 - POST {{base}}/messenger/messages/{message_id}/cancel-schedule
 
 Message body is plain UTF-8 text. Unicode emoji and line breaks are
@@ -984,6 +985,9 @@ participant, send-permission, group posting mode, rate, event, and cache rules.
 
 - GET {{base}}/messenger/groups/search?q=...
 - POST {{base}}/messenger/groups/{conversation_id}/join
+- POST {{base}}/messenger/join with {code} in the JSON body to join by invite
+- GET {{base}}/messenger/me/join-requests
+- DELETE {{base}}/messenger/join-requests/{request_id}
 - POST {{base}}/messenger/conversations to create a group (type=group, title,
   optional description, is_public and member_ids)
 - PATCH {{base}}/messenger/conversations/{conversation_id} to update settings
@@ -994,6 +998,10 @@ participant, send-permission, group posting mode, rate, event, and cache rules.
 - PATCH {{base}}/messenger/conversations/{conversation_id}/members/{user_id}/permissions
 - GET {{base}}/messenger/conversations/{conversation_id}/join-requests
 - POST {{base}}/messenger/conversations/{conversation_id}/join-requests/{request_id}/action
+- POST {{base}}/messenger/conversations/{conversation_id}/invite-links to create an invite link
+- DELETE {{base}}/messenger/conversations/{conversation_id}/invite-links/{link_id} to revoke it
+- DELETE {{base}}/messenger/conversations/{conversation_id} to delete a chat or group
+- POST {{base}}/messenger/conversations/{conversation_id}/clear-history to permanently clear messages for all participants
 
 Public group search requires a non-empty query. Joining may add the account
 immediately or create a pending join request depending on group settings.
@@ -1020,7 +1028,14 @@ Never infer consent to send a message from a successful user search.
 3. Use pagination and request only the message window needed for the task.
 4. Do not read or send Matrix/E2EE messages, and do not attempt security-mode
    conversion or plaintext fallback.
-5. Keep sends idempotent with client_message_id and verify the returned
+5. Treat invite codes as secrets: submit them in the JSON body, never as URL
+   path or query parameters.
+6. Forward only when explicitly requested; the operation requires separate
+   forward, read and send scopes.
+7. Deleting a conversation or clearing its history is irreversible. Clearing
+   history affects every participant; group history clearing is restricted to
+   owners/admins.
+8. Keep sends idempotent with client_message_id and verify the returned
    message id; don't resend blindly after a timeout.
         """,
         any_scopes=(
@@ -1032,7 +1047,11 @@ Never infer consent to send a message from a successful user search.
             "messenger.groups.search","messenger.groups.join",
             "messenger.members.read","messenger.members.manage",
             "messenger.permissions.manage","messenger.join_requests.read",
-            "messenger.join_requests.manage",
+            "messenger.join_requests.manage","messenger.join_requests.own.read",
+            "messenger.join_requests.own.cancel","messenger.invites.join",
+            "messenger.invites.create","messenger.invites.revoke",
+            "messenger.messages.forward","messenger.conversations.delete",
+            "messenger.conversations.history.clear",
         ),
     ),
     _skill(
