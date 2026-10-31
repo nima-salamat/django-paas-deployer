@@ -201,11 +201,14 @@ services:
       DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
 
     networks:
-      - app-network
-      - proxy_net
+      app-network: {}
+      proxy_net: {}
+      log-ingest-network:
+        aliases:
+          - deploy-web
       # Connect Django to the already-running Synapse network. No Synapse
       # service is defined in this Compose project.
-      - matrix-network
+      matrix-network: {}
 
 
   # ============================================================
@@ -571,6 +574,10 @@ services:
     environment:
       LOG_INGEST_SHARED_TOKEN: ${LOG_INGEST_SHARED_TOKEN:-}
       LOG_FORWARD_SOCKET_PATH: ${LOG_FORWARD_SOCKET_PATH:-/run/passdeployer-logs/forward.sock}
+      LOG_INGEST_HOST: ${LOG_INGEST_HOST:-deploy-web}
+      LOG_INGEST_PORT: ${LOG_INGEST_PORT:-8000}
+      LOG_INGEST_TLS: ${LOG_INGEST_TLS:-off}
+      LOG_COLLECTOR_DISK_LIMIT: ${LOG_COLLECTOR_DISK_LIMIT:-512M}
 
     depends_on:
       web:
@@ -578,6 +585,7 @@ services:
 
     networks:
       - app-network
+      - log-ingest-network
 
     logging:
       driver: local
@@ -665,6 +673,12 @@ networks:
     name: proxy_net
     driver: overlay
     attachable: true
+
+  # Private internal network for local or per-node Fluent Bit agents.
+  # scripts/compose.sh creates this network with the correct local driver.
+  log-ingest-network:
+    name: ${LOG_INGEST_NETWORK:-deploy_log_ingest}
+    external: true
 
   # Existing Synapse network, created by the separate Compose project in /opt/matrix.
   # MATRIX_DOCKER_NETWORK can override the usual "matrix_matrix" project-network name.
