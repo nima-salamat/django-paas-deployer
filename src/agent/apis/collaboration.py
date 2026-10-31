@@ -313,6 +313,16 @@ class AgentMessengerConversationDetailView(AgentMessengerView):
             "ConversationDetailAPIView", "patch", request, conversation_id
         )
 
+    @idempotent
+    def delete(self, request, conversation_id):
+        self.audit_mutating = True
+        _, _, error = _standard_conversation(request, conversation_id)
+        if error:
+            return error
+        return _call_messenger(
+            "DeleteConversationAPIView", "delete", request, conversation_id
+        )
+
 
 class AgentMessengerMessagesView(AgentMessengerView):
     agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/messages"
@@ -674,6 +684,177 @@ class AgentMessengerJoinRequestActionView(AgentMessengerView):
             return error
         return _call_messenger(
             "JoinRequestActionAPIView", "post", request, conversation_id, request_id
+        )
+
+
+# ---------------------------------------------------------------------------
+# Invite links, caller-owned join requests, forwarding and destructive chat
+# operations. Every route remains restricted to STANDARD conversations.
+# ---------------------------------------------------------------------------
+
+class AgentMessengerMyJoinRequestsView(AgentMessengerView):
+    agent_contract_path = "/agent/v1/messenger/me/join-requests"
+    audit_action = "agent.messenger.join_requests.own.read"
+
+    def get(self, request):
+        return _call_messenger("MyJoinRequestsAPIView", "get", request)
+
+
+class AgentMessengerJoinRequestCancelView(AgentMessengerView):
+    agent_contract_path = "/agent/v1/messenger/join-requests/{request_id}"
+    audit_action = "agent.messenger.join_requests.own.cancel"
+    audit_mutating = True
+
+    @idempotent
+    def delete(self, request, request_id):
+        from messenger.models import JoinRequest
+
+        join_request = (
+            JoinRequest.objects.select_related("conversation")
+            .filter(pk=request_id, user=request.user)
+            .first()
+        )
+        if join_request is None:
+            return _agent_error("RESOURCE_NOT_FOUND", "Join request not found.", 404)
+        _, _, error = _standard_conversation(
+            request, join_request.conversation_id, require_member=False
+        )
+        if error:
+            return error
+        return _call_messenger(
+            "JoinRequestCancelAPIView", "delete", request, request_id
+        )
+
+
+class AgentMessengerJoinByInviteView(AgentMessengerView):
+    agent_contract_path = "/agent/v1/messenger/join/{code}"
+    audit_action = "agent.messenger.invites.join"
+    audit_mutating = True
+
+    @idempotent
+    def post(self, request, code):
+        from messenger.models import GroupInviteLink
+
+        invite = (
+            GroupInviteLink.objects.select_related("conversation")
+            .filter(code=code)
+            .first()
+        )
+        if invite is None:
+            return _agent_error("RESOURCE_NOT_FOUND", "Invite link not found.", 404)
+        _, _, error = _standard_conversation(
+            request, invite.conversation_id, require_member=False
+        )
+        if error:
+            return error
+        return _call_messenger("JoinByInviteAPIView", "post", request, code)
+
+
+class AgentMessengerInviteLinksView(AgentMessengerView):
+    agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/invite-links"
+    audit_action = "agent.messenger.invites.create"
+    audit_mutating = True
+
+    @idempotent
+    def post(self, request, conversation_id):
+        _, _, error = _standard_conversation(request, conversation_id)
+        if error:
+            return error
+        return _call_messenger(
+            "InviteLinkCreateAPIView", "post", request, conversation_id
+        )
+
+
+class AgentMessengerInviteLinkRevokeView(AgentMessengerView):
+    agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/invite-links/{link_id}"
+    audit_action = "agent.messenger.invites.revoke"
+    audit_mutating = True
+
+    @idempotent
+    def delete(self, request, conversation_id, link_id):
+        from messenger.models import GroupInviteLink
+
+        link = (
+            GroupInviteLink.objects.select_related("conversation")
+            .filter(pk=link_id, conversation_id=conversation_id)
+            .first()
+        )
+        if link is None:
+            return _agent_error("RESOURCE_NOT_FOUND", "Invite link not found.", 404)
+        _, _, error = _standard_conversation(request, conversation_id)
+        if error:
+            return error
+        # The application API uses POST for revoke; the Agent API uses DELETE.
+        return _call_messenger(
+            "InviteLinkRevokeAPIView", "post", request, conversation_id, link_id
+        )
+
+
+class AgentMessengerMessageForwardView(AgentMessengerView):
+    agent_contract_path = "/agent/v1/messenger/messages/{message_id}/forward"
+    audit_action = "agent.messenger.messages.forward"
+    audit_mutating = True
+
+    @idempotent
+    def post(self, request, message_id):
+        from messenger.models import Message
+
+        message = (
+            Message.objects.select_related("conversation")
+            .filter(pk=message_id, is_deleted=False)
+            .first()
+        )
+        if message is None:
+            return _agent_error("RESOURCE_NOT_FOUND", "Message not found.", 404)
+        _, _, error = _standard_conversation(request, message.conversation_id)
+        if error:
+            return error
+        raw_target_id = request.data.get("conversation_id")
+        try:
+            target_id = int(raw_target_id)
+        except (TypeError, ValueError):
+            return _agent_error(
+                "INVALID_REQUEST", "conversation_id must be a positive integer.", 400
+            )
+        if target_id < 1:
+            return _agent_error(
+                "INVALID_REQUEST", "conversation_id must be a positive integer.", 400
+            )
+        _, _, error = _standard_conversation(request, target_id)
+        if error:
+            return error
+        return _call_messenger(
+            "MessageForwardAPIView", "post", request, message_id
+        )
+
+
+class AgentMessengerConversationHistoryClearView(AgentMessengerView):
+    agent_contract_path = "/agent/v1/messenger/conversations/{conversation_id}/clear-history"
+    audit_action = "agent.messenger.conversations.history.clear"
+    audit_mutating = True
+
+    @idempotent
+    def post(self, request, conversation_id):
+        from messenger.models import Conversation, ConversationParticipant
+
+        conv, participant, error = _standard_conversation(request, conversation_id)
+        if error:
+            return error
+        # Clearing group history affects every member; limit it to group admins.
+        if (
+            conv.type == Conversation.Type.GROUP
+            and participant.role not in (
+                ConversationParticipant.Role.OWNER,
+                ConversationParticipant.Role.ADMIN,
+            )
+        ):
+            return _agent_error(
+                "PERMISSION_DENIED",
+                "Only a group owner or admin can clear group history.",
+                403,
+            )
+        return _call_messenger(
+            "ConversationCleanupAPIView", "post", request, conversation_id
         )
 
 
