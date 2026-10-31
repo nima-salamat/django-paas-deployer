@@ -100,9 +100,11 @@ class AgentMessengerContactsView(AgentSecuredAPIView):
     audit_mutating = True
 
     def get(self, request):
+        self.audit_mutating = False
         return _call_messenger("ContactListCreateAPIView", "get", request)
 
     def post(self, request):
+        self.audit_mutating = True
         return _call_messenger("ContactListCreateAPIView", "post", request)
 
 
@@ -121,9 +123,11 @@ class AgentMessengerBlocksView(AgentSecuredAPIView):
     audit_mutating = True
 
     def get(self, request):
+        self.audit_mutating = False
         return _call_messenger("BlockListCreateAPIView", "get", request)
 
     def post(self, request):
+        self.audit_mutating = True
         return _call_messenger("BlockListCreateAPIView", "post", request)
 
 
@@ -148,6 +152,7 @@ class AgentMessengerConversationsView(AgentSecuredAPIView):
     audit_mutating = True
 
     def get(self, request):
+        self.audit_mutating = False
         from messenger.models import (
             Conversation,
             ConversationParticipant,
@@ -251,6 +256,7 @@ class AgentMessengerConversationsView(AgentSecuredAPIView):
         )
 
     def post(self, request):
+        self.audit_mutating = True
         from messenger.models import Conversation
 
         requested_mode = str(request.data.get("security_mode") or "standard").lower()
@@ -269,6 +275,7 @@ class AgentMessengerConversationDetailView(AgentSecuredAPIView):
     audit_mutating = True
 
     def get(self, request, conversation_id):
+        self.audit_mutating = False
         _, _, error = _standard_conversation(request, conversation_id)
         if error:
             return error
@@ -277,6 +284,7 @@ class AgentMessengerConversationDetailView(AgentSecuredAPIView):
         )
 
     def patch(self, request, conversation_id):
+        self.audit_mutating = True
         _, _, error = _standard_conversation(request, conversation_id)
         if error:
             return error
@@ -291,6 +299,7 @@ class AgentMessengerMessagesView(AgentSecuredAPIView):
     audit_mutating = True
 
     def get(self, request, conversation_id):
+        self.audit_mutating = False
         _, _, error = _standard_conversation(request, conversation_id)
         if error:
             return error
@@ -299,9 +308,16 @@ class AgentMessengerMessagesView(AgentSecuredAPIView):
         )
 
     def post(self, request, conversation_id):
+        self.audit_mutating = True
         _, _, error = _standard_conversation(request, conversation_id)
         if error:
             return error
+        if (request.data.get("scheduled_for") or request.data.get("schedule_at")) and "messenger.messages.schedule" not in set(request.agent.scopes or []):
+            return _agent_error(
+                "INSUFFICIENT_SCOPE",
+                "Scheduling messages requires the messenger.messages.schedule scope.",
+                status.HTTP_403_FORBIDDEN,
+            )
         return _call_messenger(
             "MessageListCreateAPIView", "post", request, conversation_id
         )
@@ -659,11 +675,13 @@ class AgentTicketsView(AgentSecuredAPIView):
     audit_mutating = True
 
     def get(self, request):
+        self.audit_mutating = False
         return _call_ticket(
             "tickets.api.user_tickets", "MyTicketListCreateAPIView", "get", request
         )
 
     def post(self, request):
+        self.audit_mutating = True
         return _call_ticket(
             "tickets.api.user_tickets", "MyTicketListCreateAPIView", "post", request
         )
