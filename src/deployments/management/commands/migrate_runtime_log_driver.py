@@ -6,7 +6,10 @@ from copy import deepcopy
 from django.core.management.base import BaseCommand, CommandError
 
 from deployments.core.swarm import SwarmRuntime
-from deployments.common.runtime_logging import fluentd_log_driver_options
+from deployments.common.runtime_logging import (
+    fluentd_log_driver_options,
+    runtime_log_ingestion_enabled,
+)
 
 
 def updated_service_spec(
@@ -67,6 +70,11 @@ class Command(BaseCommand):
             raise CommandError(f"Unable to inspect Docker Swarm services: {exc}") from exc
 
         target_driver = str(options.get("driver") or "fluentd")
+        if target_driver == "fluentd" and not runtime_log_ingestion_enabled():
+            raise CommandError(
+                "LOG_INGEST_ENABLED is disabled. Set it to 1 and deploy Fluent Bit "
+                "before migrating Swarm services to the fluentd driver."
+            )
         driver_options = fluentd_log_driver_options() if target_driver == "fluentd" else {}
         service_filter = str(options.get("service_id") or "").strip()
         apply_changes = bool(options.get("apply"))
