@@ -215,8 +215,11 @@ service data uses a 30-second max-age; context with services uses a 5-second
 max-age. It also returns an `ETag`. Send that value in
 `If-None-Match` on subsequent requests; an unchanged response returns
 `304 Not Modified`. The cache is private to the authenticated Agent and has a
-short max-age. Fetch OpenAPI and a full Skill only when the current task needs
-the detailed contract.
+short max-age. By default the combined context omits the full authorized operation
+catalog and returns only its count; add `?include=operations` when the current
+task really needs that list. The standalone `GET /agent/v1/capabilities`
+endpoint always returns the complete scope-filtered operation catalog. Fetch
+OpenAPI and a full Skill only when the current task needs the detailed contract.
 
 ### Workspace operations
 
