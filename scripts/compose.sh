@@ -161,7 +161,7 @@ prepare_runtime_log_ingestion() {
     compose_command=
     for arg in "$@"; do
         case "$arg" in
-            up|start|restart|create|run) compose_command=$arg; break ;;
+            up|start|restart|create|run|logs|ps|stop|down) compose_command=$arg; break ;;
         esac
     done
     [ -n "$compose_command" ] || return 0
@@ -189,17 +189,38 @@ prepare_runtime_log_ingestion() {
             ;;
     esac
 
-    if [ "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" = "1" ] ||
-       [ "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" = "true" ] ||
-       [ "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" = "yes" ] ||
-       [ "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" = "on" ]; then
-        case ",${COMPOSE_PROFILES:-}," in
-            *,${profile},*) ;;
-            ,,) COMPOSE_PROFILES=$profile ;;
-            *) COMPOSE_PROFILES="${COMPOSE_PROFILES},${profile}" ;;
-        esac
-        export COMPOSE_PROFILES
-    fi
+    case "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on)
+            case ",${COMPOSE_PROFILES:-}," in
+                *,${profile},*) ;;
+                ,,) COMPOSE_PROFILES=$profile ;;
+                *) COMPOSE_PROFILES="${COMPOSE_PROFILES},${profile}" ;;
+            esac
+            export COMPOSE_PROFILES
+            ;;
+    esac
+
+    # Read-only Compose commands need the matching profile to see the agent,
+    # but must not create networks, credentials, or host socket directories.
+    case "$compose_command" in
+        logs|ps|stop|down) return 0 ;;
+    esac
+
+    # The compatibility collector for standalone Docker uses the Engine API;
+    # only Swarm tasks need a Fluent Bit socket and shared ingestion token.
+    [ "$runtime_mode" = "swarm" ] || return 0
+    case "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) ;;
+        *) return 0 ;;
+    esac
+
+    LOG_FORWARD_SOCKET_PATH=$(setting LOG_FORWARD_SOCKET_PATH)
+    : "${LOG_FORWARD_SOCKET_PATH:=/run/passdeployer-logs/forward.sock}"
+    case "$LOG_FORWARD_SOCKET_PATH" in
+        /run/*/*.sock) ;;
+        *) echo "ERROR: LOG_FORWARD_SOCKET_PATH must be a .sock path under /run." >&2; return 2 ;;
+    esac
+    LOG_FORWARD_SOCKET_DIR=$(dirname "$LOG_FORWARD_SOCKET_PATH")
 
     LOG_INGEST_NETWORK=$(setting LOG_INGEST_NETWORK)
     : "${LOG_INGEST_NETWORK:=deploy_log_ingest}"
@@ -207,36 +228,18 @@ prepare_runtime_log_ingestion() {
         echo "ERROR: Invalid LOG_INGEST_NETWORK name." >&2
         return 2
     }
-    export LOG_INGEST_NETWORK
+    export LOG_FORWARD_SOCKET_PATH LOG_FORWARD_SOCKET_DIR LOG_INGEST_NETWORK
 
     if ! docker network inspect "$LOG_INGEST_NETWORK" >/dev/null 2>&1; then
-        if [ "$expected_driver" = "overlay" ]; then
-            docker network create --driver overlay --attachable --internal "$LOG_INGEST_NETWORK" >/dev/null
-        else
-            docker network create --driver bridge --internal "$LOG_INGEST_NETWORK" >/dev/null
-        fi
+        docker network create --driver overlay --attachable --internal "$LOG_INGEST_NETWORK" >/dev/null
     fi
     actual_driver=$(docker network inspect --format '{{.Driver}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
     is_internal=$(docker network inspect --format '{{.Internal}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
-    if [ "$actual_driver" != "$expected_driver" ] || [ "$is_internal" != "true" ]; then
-        echo "ERROR: $LOG_INGEST_NETWORK must be an internal $expected_driver network (found driver=$actual_driver internal=$is_internal)." >&2
+    attachable=$(docker network inspect --format '{{.Attachable}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
+    if [ "$actual_driver" != "overlay" ] || [ "$is_internal" != "true" ] || [ "$attachable" != "true" ]; then
+        echo "ERROR: $LOG_INGEST_NETWORK must be an attachable internal Swarm overlay (driver=$actual_driver internal=$is_internal attachable=$attachable)." >&2
         return 2
     fi
-    if [ "$expected_driver" = "overlay" ]; then
-        attachable=$(docker network inspect --format '{{.Attachable}}' "$LOG_INGEST_NETWORK" 2>/dev/null || true)
-        [ "$attachable" = "true" ] || {
-            echo "ERROR: $LOG_INGEST_NETWORK must be attachable." >&2
-            return 2
-        }
-    fi
-
-    # The legacy Docker collector uses Docker's json-file API and needs no
-    # extra token/socket. Fluent Bit is required only for Swarm workloads.
-    [ "$runtime_mode" = "swarm" ] || return 0
-    case "$(printf '%s' "$LOG_INGEST_ENABLED" | tr '[:upper:]' '[:lower:]')" in
-        1|true|yes|on) ;;
-        *) return 0 ;;
-    esac
 
     LOG_INGEST_SHARED_TOKEN=$(setting LOG_INGEST_SHARED_TOKEN)
     if [ -z "$LOG_INGEST_SHARED_TOKEN" ]; then
@@ -264,15 +267,6 @@ prepare_runtime_log_ingestion() {
         echo "Generated LOG_INGEST_SHARED_TOKEN in .env."
     fi
     export LOG_INGEST_SHARED_TOKEN
-
-    LOG_FORWARD_SOCKET_PATH=$(setting LOG_FORWARD_SOCKET_PATH)
-    : "${LOG_FORWARD_SOCKET_PATH:=/run/passdeployer-logs/forward.sock}"
-    case "$LOG_FORWARD_SOCKET_PATH" in
-        /run/*/*.sock) ;;
-        *) echo "ERROR: LOG_FORWARD_SOCKET_PATH must be a .sock path under /run." >&2; return 2 ;;
-    esac
-    LOG_FORWARD_SOCKET_DIR=$(dirname "$LOG_FORWARD_SOCKET_PATH")
-    export LOG_FORWARD_SOCKET_PATH LOG_FORWARD_SOCKET_DIR
 
     if [ "$(id -u)" -eq 0 ]; then
         sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
