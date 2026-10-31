@@ -289,6 +289,40 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         self.assertEqual(limits["cpu"], 1.5)
         self.assertEqual(limits["memory_mb"], 768)
 
+    def test_create_kwargs_use_fluent_bit_driver_by_default(self):
+        config = _config()
+        spec = compile_compose_service(config, image_ref="demo:r1")
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+        env = {
+            "LOG_INGEST_ENABLED": "1",
+            "LOG_FORWARD_SOCKET_PATH": "/run/passdeployer-logs/forward.sock",
+            "LOG_FLUENTD_BUFFER_LIMIT": "256",
+            "LOG_DOCKER_BUFFER_SIZE": "128k",
+        }
+        with patch.dict("os.environ", env, clear=False), \
+             patch.object(runtime, "_apply_local_volume_pin", return_value=[]):
+            kwargs = runtime._create_kwargs(config, image_ref="demo:r1", compose_spec=spec)
+
+        self.assertEqual(kwargs["log_driver"], "fluentd")
+        self.assertEqual(
+            kwargs["log_driver_options"]["fluentd-address"],
+            "unix:///run/passdeployer-logs/forward.sock",
+        )
+        self.assertEqual(kwargs["log_driver_options"]["fluentd-buffer-limit"], "256")
+        self.assertEqual(kwargs["log_driver_options"]["max-buffer-size"], "128k")
+        self.assertEqual(kwargs["log_driver_options"]["mode"], "non-blocking")
+
+    def test_create_kwargs_can_disable_fluent_bit_driver_for_rollback(self):
+        config = _config()
+        spec = compile_compose_service(config, image_ref="demo:r1")
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+        with patch.dict("os.environ", {"LOG_INGEST_ENABLED": "0"}, clear=False), \
+             patch.object(runtime, "_apply_local_volume_pin", return_value=[]):
+            kwargs = runtime._create_kwargs(config, image_ref="demo:r1", compose_spec=spec)
+
+        self.assertNotIn("log_driver", kwargs)
+        self.assertNotIn("log_driver_options", kwargs)
+
     def test_create_kwargs_materialize_read_only_runtime_tmpfs(self):
         config = _config(read_only=True)
         spec = compile_compose_service(config, image_ref="demo:r1")
