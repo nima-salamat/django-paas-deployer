@@ -85,8 +85,10 @@ def test_task_logs_fall_back_to_persisted_stream_when_remote_node_is_unreachable
     }]
     entry_query.order_by.return_value.values.return_value = entry_values
 
-    with patch("logs.models.ServiceLogStream.objects.using") as stream_using, \\
-         patch("logs.models.ServiceLogEntry.objects.using") as entry_using:
+    with (
+        patch("logs.models.ServiceLogStream.objects.using") as stream_using,
+        patch("logs.models.ServiceLogEntry.objects.using") as entry_using,
+    ):
         stream_using.return_value.filter.return_value = stream_query
         entry_using.return_value.filter.return_value = entry_query
 
