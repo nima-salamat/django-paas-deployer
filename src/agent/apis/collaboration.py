@@ -727,14 +727,19 @@ class AgentMessengerJoinRequestCancelView(AgentMessengerView):
 
 
 class AgentMessengerJoinByInviteView(AgentMessengerView):
-    agent_contract_path = "/agent/v1/messenger/join/{code}"
+    # Invite codes are accepted in the JSON body, never in the URL, to keep
+    # them out of browser history, reverse-proxy access logs and audit paths.
+    agent_contract_path = "/agent/v1/messenger/join"
     audit_action = "agent.messenger.invites.join"
     audit_mutating = True
 
     @idempotent
-    def post(self, request, code):
+    def post(self, request):
         from messenger.models import GroupInviteLink
 
+        code = str(request.data.get("code") or "").strip()
+        if not code:
+            return _agent_error("INVALID_REQUEST", "code is required.", 400)
         invite = (
             GroupInviteLink.objects.select_related("conversation")
             .filter(code=code)
