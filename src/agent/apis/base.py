@@ -149,18 +149,20 @@ class AgentAPIView(APIView):
                 "agent_id": str(getattr(getattr(request, "agent", None), "pk", "") or ""),
                 "credential_id": str(getattr(getattr(request, "agent_credential", None), "pk", "") or ""),
             })
+            tool_error = bool(audit_metadata.get("tool_error"))
             audit(
                 request=request,
                 action=self.audit_action,
-                success=200 <= status_code < 400,
+                success=200 <= status_code < 400 and not tool_error,
                 status_code=status_code,
                 resource_type=self.audit_resource_type,
                 resource_id=_audit_resource_id(kwargs, data),
-                error_code=str(data.get("code") or ""),
-                failure_domain=str(data.get("failure_domain") or ""),
-                retryability=bool(data.get("retryable")),
+                error_code=str(data.get("code") or audit_metadata.get("tool_error_code") or ""),
+                failure_domain=str(data.get("failure_domain") or audit_metadata.get("tool_failure_domain") or ""),
+                retryability=bool(data.get("retryable") or audit_metadata.get("tool_retryable")),
                 resource_effect=(
                     "queued" if status_code == 202
+                    else "unchanged" if tool_error
                     else "changed" if self.audit_mutating and 200 <= status_code < 400
                     else "unchanged"
                 ),

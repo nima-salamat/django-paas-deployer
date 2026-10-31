@@ -13,6 +13,7 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `agent` | `src/agent/urls.py` | explicit | `v1/auth/exchange` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/auth/me` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/capabilities` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/context` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/deployments/<uuid:deployment_id>/cancel` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/deployments/<uuid:deployment_id>/logs/export` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/deployments/<uuid:deployment_id>/logs` | [app API docs](../apps/agent/api.md) |
@@ -34,6 +35,7 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `agent` | `src/agent/urls.py` | explicit | `v1/plans/manage` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/plans` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/configuration` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/commands/batch` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/database-credentials` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/databases` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/endpoints` | [app API docs](../apps/agent/api.md) |
@@ -41,6 +43,7 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/logs/export` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/logs` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/metrics` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/mcp` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/networks` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/purge-runtime` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/rebuild` | [app API docs](../apps/agent/api.md) |
@@ -58,6 +61,12 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/start` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/status` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/stop` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/tools/<str:tool_name>` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/workspace/patch` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/workspace/read-many` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/workspace/search` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/workspace/tree` | [app API docs](../apps/agent/api.md) |
+| `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/workspace/write-many` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/tools/<str:tool_name>` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>/tools` | [app API docs](../apps/agent/api.md) |
 | `agent` | `src/agent/urls.py` | explicit | `v1/services/<uuid:service_id>` | [app API docs](../apps/agent/api.md) |

@@ -266,6 +266,7 @@ class WorkspaceWriteManyView(AgentSecuredAPIView):
             outcome = _payload(response)
             results.append({"path": path, "ok": response.status_code < 400 and outcome.get("result") != "error",
                             "status": response.status_code, "result": outcome})
+        self.audit_mutating = any(bool(row.get("ok")) for row in results)
         self.audit_metadata = {"file_count": len(files), "content_bytes": total}
         return Response({"result": "success", "service_id": str(service_id), "files": results,
                          "written": sum(bool(row.get("ok")) for row in results),
@@ -326,6 +327,7 @@ class WorkspacePatchView(AgentSecuredAPIView):
         diff = raw_diff[:65536]
         diff_truncated = len(raw_diff) > len(diff)
         if request.data.get("dry_run", True) is True or request.data.get("apply") is not True:
+            self.audit_mutating = False
             return Response({"result": "success", "dry_run": True, "applied": False, "path": path,
                              "old_sha256": current_hash, "new_sha256": new_hash, "diff": diff,
                              "diff_truncated": diff_truncated})
@@ -436,6 +438,10 @@ class AgentCommandBatchView(AgentSecuredAPIView):
             results.append(result)
             if request.data.get("continue_on_error", True) is False and not result.get("ok"):
                 break
+        self.audit_mutating = any(
+            bool(row.get("ok")) and str(row.get("risk") or "").upper() != "READ_ONLY"
+            for row in results
+        )
         self.audit_metadata = {"command_count": len(commands), "completed_count": len(results),
                                "output_bytes": total_output}
         return Response({"result": "success", "service_id": str(service.pk), "commands": results,
@@ -730,6 +736,9 @@ class AgentMCPView(AgentSecuredAPIView):
                 return Response({"jsonrpc": "2.0", "id": request_id, "result": body})
             except AgentError as exc:
                 self.audit_mutating = False
+                self.audit_metadata.update({"tool_error": True, "tool_error_code": exc.code,
+                                            "tool_failure_domain": exc.failure_domain,
+                                            "tool_retryable": bool(exc.retryability)})
                 detail = {"code": exc.code, "detail": exc.detail,
                           "failure_domain": exc.failure_domain, **(exc.extra or {})}
                 body = self._success_result(protocol, {
@@ -738,6 +747,8 @@ class AgentMCPView(AgentSecuredAPIView):
                 return Response({"jsonrpc": "2.0", "id": request_id, "result": body})
             except Exception:
                 self.audit_mutating = False
+                self.audit_metadata.update({"tool_error": True, "tool_error_code": "TOOL_EXECUTION_FAILED",
+                                            "tool_failure_domain": "runtime"})
                 detail = {"code": "TOOL_EXECUTION_FAILED",
                           "detail": "Tool execution failed; inspect the request ID and service audit event."}
                 body = self._success_result(protocol, {
