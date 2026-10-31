@@ -34,7 +34,6 @@ services:
       LOG_INGEST_HOST: deploy-web
       LOG_INGEST_PORT: "8000"
       LOG_INGEST_TLS: "off"
-      LOG_COLLECTOR_ID: "{{.Node.Hostname}}"
       LOG_COLLECTOR_DISK_LIMIT: ${LOG_COLLECTOR_DISK_LIMIT}
     networks:
       - log-ingest-network
