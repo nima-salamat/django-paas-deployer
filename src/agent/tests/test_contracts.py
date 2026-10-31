@@ -183,6 +183,7 @@ class AgentContractTests(TestCase):
             "{message_id}": "103",
             "{request_id}": "104",
             "{ticket_id}": "105",
+            "{link_id}": "106",
         }
         for contract in CONTRACTS:
             path = contract.path
@@ -209,6 +210,7 @@ class AgentContractTests(TestCase):
             "<int:message_id>": "{message_id}",
             "<int:request_id>": "{request_id}",
             "<int:ticket_id>": "{ticket_id}",
+            "<int:link_id>": "{link_id}",
         }
         for pattern in agent_urls.urlpatterns:
             route = "/agent/" + str(pattern.pattern._route)
