@@ -90,8 +90,10 @@ def test_wordpress_catalog_executable_paths_reach_swarm_unchanged():
     assert service["tmpfs"] == [
         {"target": "/tmp", "size": 64 * 1024 * 1024, "mode": 0o1777},
         {"target": "/var/tmp", "size": 32 * 1024 * 1024, "mode": 0o1777},
-        {"target": "/run", "size": 16 * 1024 * 1024, "mode": 0o1777},
     ]
+    # This writable WordPress image keeps its own /run contents; only the
+    # scratch/upload paths are overlaid with tmpfs.
+    assert all(mount["target"] != "/run" for mount in service["tmpfs"])
 
     # The downstream executable must be checked in the actual image at build
     # time, not merely accepted as a string in Swarm Args.

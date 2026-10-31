@@ -153,11 +153,13 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         client.services.get.side_effect = docker.errors.NotFound("missing")
         client.services.create.return_value = MagicMock()
         runtime = SwarmRuntime(client)
-        config = _config(networks=[], endpoints=[])
+        # This test exercises replica propagation, not registry-backed volume
+        # provisioning. Keep it independent from Service UUID/Volume rows.
+        config = _config(networks=[], endpoints=[], volumes=[])
 
         with patch.object(runtime, "assert_active"), \
              patch.object(runtime, "prepare_image", return_value="demo:r1"), \
-             patch.object(runtime, "inspect_service", return_value=SimpleNamespace(service_image="demo:r1")), \
+             patch.object(runtime, "inspect_service", return_value=SimpleNamespace(service_image="demo:r1", update_state=None)), \
              patch.object(runtime, "wait_ready", return_value=SimpleNamespace(replicas_desired=3)), \
              patch.object(runtime, "_create_kwargs", return_value={"name": "demo"}), \
              patch("deployments.core.swarm.compile_compose_service", wraps=compile_compose_service) as compiler:
@@ -172,19 +174,28 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         service = MagicMock()
         service.attrs = {
             "Spec": {
+                # Updating an existing Swarm service requires positive proof
+                # that it is owned by the Service under test.
+                "Labels": {
+                    "managed-by": "django-paas-deployer",
+                    "passdeployer.service": "svc-1",
+                },
                 "TaskTemplate": {
                     "ForceUpdate": 7,
                 },
             },
         }
+        service.name = "demo"
         service.reload.return_value = service
         client.services.get.return_value = service
         runtime = SwarmRuntime(client)
-        config = _config(networks=[], endpoints=[])
+        # This test verifies ForceUpdate handling, not persistent-volume
+        # registry validation. It should not need a Service or Volume row.
+        config = _config(networks=[], endpoints=[], volumes=[])
 
         with patch.object(runtime, "assert_active"), \
              patch.object(runtime, "prepare_image", return_value="demo:r1"), \
-             patch.object(runtime, "inspect_service", return_value=SimpleNamespace(service_image="demo:r1")), \
+             patch.object(runtime, "inspect_service", return_value=SimpleNamespace(service_image="demo:r1", update_state=None)), \
              patch.object(runtime, "_create_kwargs", return_value={"name": "demo"}):
             runtime.apply(
                 config,
@@ -250,9 +261,13 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         service = spec["services"]["demo"]
         self.assertFalse(service["read_only"])
         tmpfs_mounts = {mount["target"]: mount for mount in service["tmpfs"]}
-        self.assertIn("/tmp", tmpfs_mounts)
+        self.assertEqual(set(tmpfs_mounts), {"/tmp", "/var/tmp"})
         self.assertEqual(tmpfs_mounts["/tmp"]["size"], 64 * 1024 * 1024)
         self.assertEqual(tmpfs_mounts["/tmp"]["mode"], 0o1777)
+        self.assertEqual(tmpfs_mounts["/var/tmp"]["size"], 32 * 1024 * 1024)
+        # Writable database images must retain image-owned paths such as
+        # /run/mysqld; a tmpfs over /run would hide them.
+        self.assertNotIn("/run", tmpfs_mounts)
 
     def test_process_resources_cannot_exceed_plan_cpu_or_memory(self):
         with self.assertRaises(Exception):
@@ -350,6 +365,37 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
         }
         self.assertEqual(aliases_by_network["net-demo"], ["mariadb"])
         self.assertEqual(aliases_by_network.get("proxy_net", []), [])
+
+    def test_create_kwargs_keeps_mariadb_image_run_directory_visible(self):
+        config = _config(
+            read_only=False,
+            platform="mariadb",
+            platform_type="DB",
+            labels={
+                "service.id": "svc-db",
+                "deployment.id": "dep-db",
+                "process.name": "database",
+                "application.id": "app-1",
+                "application.service": "mariadb",
+            },
+        )
+        spec = compile_compose_service(config, image_ref="mariadb:11.8.9")
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+
+        with patch.object(runtime, "_apply_local_volume_pin", return_value=[]):
+            kwargs = runtime._create_kwargs(
+                config,
+                image_ref="mariadb:11.8.9",
+                compose_spec=spec,
+            )
+
+        tmpfs_targets = {
+            mount["Target"]
+            for mount in kwargs["mounts"]
+            if mount.get("Type") == "tmpfs"
+        }
+        self.assertEqual(tmpfs_targets, {"/tmp", "/var/tmp"})
+        self.assertNotIn("/run", tmpfs_targets)
 
     def test_create_kwargs_keeps_ready_app_alias_off_proxy_network(self):
         config = _config(

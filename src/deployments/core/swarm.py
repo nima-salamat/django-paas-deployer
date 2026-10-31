@@ -352,16 +352,25 @@ def compile_compose_service(config, *, image_ref: str, replicas: int = 1) -> dic
         },
     }
 
-    # Keep runtime scratch paths writable and outside the container layer.
+    # Keep upload/scratch paths writable and outside the container layer.
     # PHP uploads create a temporary file (normally under /tmp) before WordPress
-    # can move it into wp-content/uploads. The local Docker backend provisions
-    # these tmpfs mounts unconditionally; native Swarm must preserve the same
-    # contract for both writable and read-only root filesystems.
+    # can move it into wp-content/uploads. Keep these paths available for both
+    # writable and read-only root filesystems.
     service["tmpfs"] = [
         {"target": "/tmp", "size": 64 * 1024 * 1024, "mode": 0o1777},
         {"target": "/var/tmp", "size": 32 * 1024 * 1024, "mode": 0o1777},
-        {"target": "/run", "size": 16 * 1024 * 1024, "mode": 0o1777},
     ]
+
+    # Do not mask /run for every service. Some database images create required
+    # runtime directories in the image itself; MariaDB's official entrypoint,
+    # for example, expects /run/mysqld to exist before it changes ownership.
+    # A tmpfs mounted at /run hides that directory and makes the entrypoint exit
+    # before the server starts. Preserve the previous read-only-only behavior:
+    # provide writable /run when a read-only root filesystem explicitly needs it.
+    if bool(config.read_only):
+        service["tmpfs"].append(
+            {"target": "/run", "size": 16 * 1024 * 1024, "mode": 0o1777}
+        )
 
     ports = []
     for endpoint in config.endpoints or ():

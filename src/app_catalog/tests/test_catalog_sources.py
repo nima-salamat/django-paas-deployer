@@ -195,8 +195,9 @@ networks:
         self.assertEqual(healthcheck["timeout"], "10s")
         self.assertEqual(healthcheck["start_period"], "60s")
         self.assertEqual(healthcheck["retries"], 36)
+        # YAML literal block scalars preserve one trailing newline.
         self.assertEqual(
-            wordpress["environment"]["WORDPRESS_CONFIG_EXTRA"],
+            wordpress["environment"]["WORDPRESS_CONFIG_EXTRA"].rstrip("\n"),
             "define( 'WP_HOME', 'https://app.example.com' );\n"
             "define( 'WP_SITEURL', 'https://app.example.com' );\n"
             "define( 'FORCE_SSL_ADMIN', true );\n"
@@ -294,7 +295,7 @@ networks:
         # Variables belong to the shell/container runtime, not catalog template
         # interpolation, and must survive byte-for-byte through resolution.
         self.assertIn("${WORDPRESS_ROOT:-/var/www/html}", script)
-        self.assertIn("${PATH:+$PATH}", script)
+        self.assertIn("${PATH:+:$PATH}", script)
         self.assertIn("${WORDPRESS_AUTO_INSTALL:-1}", script)
         self.assertEqual(
             wordpress["command"],

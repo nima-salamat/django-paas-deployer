@@ -25,6 +25,30 @@ on:
       - "src/deployments/tests/test_swarm_startup_diagnostics.py"
       - "src/app_catalog/tests/integration/test_ready_app_runtime.py"
       - ".github/workflows/wordpress-runtime-contract.yml"
+  pull_request:
+    branches: ["master"]
+    paths:
+      - "src/app_catalog/catalog/first_party/wordpress-with-mariadb.yaml"
+      - "src/app_catalog/compose_catalog.py"
+      - "src/app_catalog/source_loader.py"
+      - "src/app_catalog/tests/test_catalog_sources.py"
+      - "src/app_catalog/services.py"
+      - "src/deployments/common/deployment_profile.py"
+      - "src/deployments/core/platform_bridge.py"
+      - "src/deployments/core/runtime_graph.py"
+      - "src/deployments/runtime/execution_contract.py"
+      - "src/deployments/runtime/swarm/adapter.py"
+      - "src/deployments/core/dockerfile.py"
+      - "src/deployments/core/swarm.py"
+      - "src/deployments/celery/services/deploy_service.py"
+      - "src/deployments/tests/test_platform_bridge_regressions.py"
+      - "src/deployments/tests/test_execution_contract.py"
+      - "src/deployments/tests/test_swarm_runtime.py"
+      - "src/deployments/tests/test_wordpress_runtime_path_trace.py"
+      - "src/deployments/tests/test_catalog_runtime_authority_regressions.py"
+      - "src/deployments/tests/test_swarm_startup_diagnostics.py"
+      - "src/app_catalog/tests/integration/test_ready_app_runtime.py"
+      - ".github/workflows/wordpress-runtime-contract.yml"
   workflow_dispatch:
 
 jobs:
@@ -236,11 +260,29 @@ jobs:
       - name: Assert WP-CLI installation completed
         run: |
           set -euo pipefail
-          logs="$(docker logs passdeployer-wp)"
-          install_line="$(printf '%s\n' "$logs" | grep -nF "[passdeployer-wordpress] Installing WordPress through WP-CLI..." | head -n1 | cut -d: -f1)"
-          ready_line="$(printf '%s\n' "$logs" | grep -nF "[passdeployer-wordpress] WordPress installation is ready." | head -n1 | cut -d: -f1)"
-          start_line="$(printf '%s\n' "$logs" | grep -nF "[passdeployer-wordpress] Starting WordPress foreground command:" | head -n1 | cut -d: -f1)"
-          apache_line="$(printf '%s\n' "$logs" | grep -nF "Apache/2." | grep -F "resuming normal operations" | head -n1 | cut -d: -f1)"
+
+          find_line() {
+            printf '%s\n' "$logs" | awk -v first="$1" -v second="${2:-}" \
+              'index($0, first) && (second == "" || index($0, second)) { print NR; exit }'
+          }
+
+          # The healthcheck is based on the readiness marker and can become
+          # healthy just before Apache emits its startup line. Wait for that
+          # final log entry instead of racing it with a one-shot assertion.
+          apache_line=""
+          for attempt in $(seq 1 60); do
+            logs="$(docker logs passdeployer-wp 2>&1)"
+            apache_line="$(find_line "Apache/2." "resuming normal operations")"
+            if [ -n "$apache_line" ]; then
+              break
+            fi
+            sleep 1
+          done
+
+          install_line="$(find_line "[passdeployer-wordpress] Installing WordPress through WP-CLI...")"
+          ready_line="$(find_line "[passdeployer-wordpress] WordPress installation is ready.")"
+          start_line="$(find_line "[passdeployer-wordpress] Starting WordPress foreground command:")"
+
           test -n "$install_line"
           test -n "$ready_line"
           test -n "$start_line"
