@@ -76,3 +76,17 @@ The API reference is source-defined from `src/agent/contracts.py`; the machine-r
 - [Detailed API reference](api.md)
 
 - [Browser Agent management API](user-api.md)
+
+
+## Messenger and Tickets
+
+\`src/agent/apis/collaboration.py\` exposes the account owner's ordinary
+Messenger chats and customer-owned Tickets through the Agent token. It
+delegates to the existing application APIs so membership checks, block rules,
+ticket ownership, rich-text sanitization, scheduled-delivery behavior, message
+cache invalidation and durable event recording remain centralized.
+
+Messenger E2EE/Matrix rooms are intentionally unsupported. Ticket staff/admin
+operations and tickets owned by other users are also excluded. Grant the
+new \`messenger.*\` and \`tickets.*\` scopes explicitly; neither is included in
+the default Agent permission set.
