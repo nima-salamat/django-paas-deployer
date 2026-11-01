@@ -821,3 +821,17 @@ class SwarmRuntimeCleanupTests(unittest.TestCase):
 
         runtime.remove.assert_called_once_with("demo")
         container.remove.assert_called_once_with(force=True)
+
+
+class SwarmRuntimeStopWaitTests(unittest.TestCase):
+    def test_wait_group_requires_desired_replicas_to_reach_zero(self):
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+        runtime.service_names_for_service = MagicMock(return_value=["demo-web"])
+        runtime.inspect_service = MagicMock(
+            return_value=SimpleNamespace(replicas_desired=1, replicas_running=0)
+        )
+
+        with patch("deployments.core.swarm.time.monotonic", side_effect=[1.0, 2.0]):
+            self.assertFalse(
+                runtime.wait_service_group_stopped("service-1", timeout=0.0)
+            )

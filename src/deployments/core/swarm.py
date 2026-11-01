@@ -3130,17 +3130,19 @@ class SwarmRuntime:
             names = self.service_names_for_service(service_id)
             if not names:
                 return True
-            running = False
+            pending = False
             for name in names:
                 try:
                     state = self.inspect_service(name)
                 except Exception:
-                    running = True
+                    pending = True
                     continue
-                if state is not None and state.replicas_running > 0:
-                    running = True
+                if state is not None and (
+                    state.replicas_desired > 0 or state.replicas_running > 0
+                ):
+                    pending = True
                     break
-            if not running:
+            if not pending:
                 return True
             if time.monotonic() >= deadline:
                 return False
