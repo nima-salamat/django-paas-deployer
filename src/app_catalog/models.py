@@ -8,6 +8,8 @@ class ApplicationStatus(models.TextChoices):
     PENDING = "pending", "Pending"
     DEPLOYING = "deploying", "Deploying"
     RUNNING = "running", "Running"
+    DEGRADED = "degraded", "Degraded"
+    STOPPED = "stopped", "Stopped"
     FAILED = "failed", "Failed"
     CANCELLED = "cancelled", "Cancelled"
 

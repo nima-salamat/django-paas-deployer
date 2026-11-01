@@ -44,6 +44,44 @@ def _safe_component_list(definition: CatalogDefinition) -> list[dict]:
     return out
 
 
+def _public_variant_services(variant: dict) -> list[dict]:
+    """Expose child identity and resource requirements without runtime secrets."""
+    raw_services = variant.get("services") or []
+    compose_document = variant.get("compose_document") or {}
+    if not raw_services and isinstance(compose_document, dict):
+        compose_services = compose_document.get("services") or {}
+        if isinstance(compose_services, dict):
+            raw_services = [
+                {"key": str(key), **(value if isinstance(value, dict) else {})}
+                for key, value in compose_services.items()
+            ]
+
+    rows = []
+    for item in raw_services:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or item.get("service_key") or "").strip()
+        if not key:
+            continue
+        role = str(item.get("role") or "app")
+        plan_type = str(item.get("plan_type") or ("DB" if role == "database" else "APP")).upper()
+        try:
+            replicas = max(1, int(item.get("replicas") or 1))
+        except (TypeError, ValueError):
+            replicas = 1
+        rows.append({
+            "key": key,
+            "label": _display_component_label(item.get("label") or key),
+            "role": role,
+            "platform": str(item.get("platform") or ("docker" if plan_type != "DB" else "")).lower(),
+            "plan_type": plan_type,
+            "required": bool(item.get("required", True)),
+            "replicas": replicas,
+            "depends_on": _safe_string_list(item.get("depends_on")),
+        })
+    return rows
+
+
 def _public_field(field: dict) -> dict | None:
     if field.get("user_editable", True) is False:
         return None
@@ -125,6 +163,7 @@ def public_catalog_definition(
             "availability": str(variant.get("availability") or "supported"),
             "unavailable_reason": str(variant.get("unavailable_reason") or ""),
             "fields": fields,
+            "services": _public_variant_services(variant),
         })
     links = {}
     for key in ("documentation", "website", "repo", "support", "docs"):
@@ -261,10 +300,17 @@ class ApplicationInstanceSerializer(serializers.ModelSerializer):
                 "service_name": service.name,
                 "service_host": service_host,
                 "deploy_id": str(deploy.pk),
-                "status": deploy.status,
+                "status": service.status,
+                "deploy_status": deploy.status,
                 "stage": deploy.stage,
                 "status_message": deploy.status_message,
                 "error_message": deploy.error_message if deploy.status == "failed" else "",
+                "plan": {
+                    "id": str(service.plan_id),
+                    "name": str(getattr(service.plan, "name", "") or ""),
+                    "platform": str(getattr(service.plan, "platform", "") or ""),
+                    "plan_type": str(getattr(service.plan, "plan_type", "") or ""),
+                },
                 "resource_limits": {
                     "cpu_vcpu": getattr(service.plan, "max_cpu", None),
                     "ram_mb": getattr(service.plan, "max_ram", None),
@@ -321,8 +367,15 @@ class ApplicationInstanceSerializer(serializers.ModelSerializer):
             storage = sum(int(v.size_mb or 0) for v in service.volumes.all())
             total_storage += storage
             services.append({
+                "key": str(binding.service_key),
                 "name": _display_component_label(binding.service_key),
                 "role": "database" if str(service.plan.plan_type) == "DB" else "application",
+                "plan_id": str(service.plan_id),
+                "plan": {
+                    "name": str(service.plan.name),
+                    "platform": str(service.plan.platform),
+                    "plan_type": str(service.plan.plan_type),
+                },
                 "cpu_vcpu": service.plan.max_cpu,
                 "ram_mb": service.plan.max_ram,
                 "storage_mb": storage,

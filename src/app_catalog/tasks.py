@@ -196,13 +196,17 @@ def supervise_ready_applications():
     queryset = (
         ApplicationInstance.objects
         .filter(
-            status=ApplicationStatus.RUNNING,
+            status__in=(
+                ApplicationStatus.RUNNING,
+                ApplicationStatus.DEGRADED,
+                ApplicationStatus.STOPPED,
+            ),
         )
         .exclude(stage="deletion_pending")
         .order_by("updated_at")
     )[:batch_size]
 
-    healthy = degraded = corrupted = missing = 0
+    healthy = degraded = stopped = corrupted = missing = 0
     for instance in queryset.iterator():
         try:
             result = ApplicationStackExecutor(str(instance.pk)).supervise_runtime()
@@ -211,6 +215,8 @@ def supervise_ready_applications():
                 healthy += 1
             elif state == "degraded":
                 degraded += 1
+            elif state == "stopped":
+                stopped += 1
             elif state == "corrupted":
                 corrupted += 1
             elif state == "missing":
@@ -226,6 +232,7 @@ def supervise_ready_applications():
         "checked": healthy + degraded + corrupted + missing,
         "healthy": healthy,
         "degraded": degraded,
+        "stopped": stopped,
         "corrupted": corrupted,
         "missing": missing,
     }

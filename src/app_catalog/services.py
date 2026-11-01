@@ -88,9 +88,99 @@ def prepare_application_resolution(definition, variant_id: str, name: str, confi
     return resolved
 
 
-def resource_summary_for_resolved(resolved: dict, base_plan: Plan) -> dict:
-    """Validate child-plan allocation and return a server-authoritative preview."""
+def _resolve_service_plans(
+    resolved: dict,
+    *,
+    base_plan: Plan | None = None,
+    service_plan_ids: dict | None = None,
+) -> dict[str, Plan]:
+    """Resolve one server-validated resource Plan for each immutable child service."""
     application_plan = plan_from_resolved(resolved)
+    selected = service_plan_ids or {}
+    if not isinstance(selected, dict):
+        raise CatalogValidationError("service_plan_ids must be an object keyed by service key.")
+
+    service_keys = {str(spec.key) for spec in application_plan.services}
+    selected_keys = {str(key) for key in selected}
+    if selected and selected_keys != service_keys:
+        missing = sorted(service_keys - selected_keys)
+        extra = sorted(selected_keys - service_keys)
+        details = []
+        if missing:
+            details.append("missing: " + ", ".join(missing))
+        if extra:
+            details.append("unknown: " + ", ".join(extra))
+        raise CatalogValidationError(
+            "Choose a resource plan for every application service (" + "; ".join(details) + ")."
+        )
+    if service_plan_ids is not None and any(
+        selected.get(key) in (None, "") for key in service_keys
+    ):
+        raise CatalogValidationError("Choose a resource plan for every application service.")
+
+    plans: dict[str, Plan] = {}
+    for spec in application_plan.services:
+        key = str(spec.key)
+        selected_id = selected.get(key)
+        if selected_id not in (None, ""):
+            assigned = Plan.objects.filter(pk=selected_id).first()
+            if assigned is None:
+                raise CatalogValidationError(
+                    f"Selected resource plan for service {key!r} was not found."
+                )
+            expected_platform = str(spec.platform or "docker").strip().lower()
+            actual_platform = str(assigned.platform or "").strip().lower()
+            expected_type = str(spec.plan_type or PlanTypeChoices.APP)
+            allowed_types = (
+                {str(PlanTypeChoices.APP), str(PlanTypeChoices.READY)}
+                if expected_type in {str(PlanTypeChoices.APP), str(PlanTypeChoices.READY)}
+                else {expected_type}
+            )
+            if actual_platform != expected_platform or str(assigned.plan_type) not in allowed_types:
+                raise CatalogValidationError(
+                    f"The selected plan for service {key!r} must match "
+                    f"platform={expected_platform} and plan_type={expected_type}."
+                )
+        elif base_plan is not None:
+            assigned = _find_plan(
+                base_plan=base_plan,
+                platform=spec.platform,
+                plan_type=spec.plan_type,
+            )
+        else:
+            expected_type = str(spec.plan_type or PlanTypeChoices.APP)
+            allowed_types = (
+                (PlanTypeChoices.APP, PlanTypeChoices.READY)
+                if expected_type in {str(PlanTypeChoices.APP), str(PlanTypeChoices.READY)}
+                else (expected_type,)
+            )
+            assigned = Plan.objects.filter(
+                platform=str(spec.platform or "docker").lower(),
+                plan_type__in=allowed_types,
+            ).order_by("id").first()
+            if assigned is None:
+                raise CatalogValidationError(
+                    f"No resource plan is available for service {key!r} "
+                    f"({spec.platform}/{expected_type})."
+                )
+        plans[key] = assigned
+    return plans
+
+
+def resource_summary_for_resolved(
+    resolved: dict,
+    base_plan: Plan | None = None,
+    *,
+    service_plan_ids: dict | None = None,
+    service_plans: dict[str, Plan] | None = None,
+) -> dict:
+    """Validate every child allocation and return a server-authoritative preview."""
+    application_plan = plan_from_resolved(resolved)
+    assigned_plans = service_plans or _resolve_service_plans(
+        resolved,
+        base_plan=base_plan,
+        service_plan_ids=service_plan_ids,
+    )
     services = []
     total_storage = 0
     total_cpu = 0.0
@@ -98,11 +188,7 @@ def resource_summary_for_resolved(resolved: dict, base_plan: Plan) -> dict:
     total_price = 0.0
 
     for spec in application_plan.services:
-        assigned = _find_plan(
-            base_plan=base_plan,
-            platform=spec.platform,
-            plan_type=spec.plan_type,
-        )
+        assigned = assigned_plans[str(spec.key)]
         storage_mb = sum(
             _render_volume_size(volume.size_mb, config=resolved.get("config") or {}, secrets=resolved.get("secrets") or {})
             for volume in spec.volumes
@@ -119,13 +205,16 @@ def resource_summary_for_resolved(resolved: dict, base_plan: Plan) -> dict:
         total_ram += float(assigned.max_ram or 0) * replicas
         total_price += float(assigned.price_per_hour or 0) * replicas
         services.append({
+            "key": str(spec.key),
             "name": _display_catalog_component_name(spec.key),
             "role": "database" if spec.role == "database" or spec.plan_type == str(PlanTypeChoices.DB) else "application",
             "platform": spec.platform,
             "replicas": int(spec.replicas or 1),
+            "plan_id": str(assigned.pk),
             "plan": {
                 "name": str(assigned.name),
                 "plan_type": str(assigned.plan_type),
+                "platform": str(assigned.platform),
                 "storage_type": str(assigned.storage_type),
             },
             "cpu_vcpu": float(assigned.max_cpu or 0),
@@ -423,27 +512,54 @@ def _dockerfile_healthcheck(healthcheck: dict | None) -> str:
     raise CatalogValidationError("Unsupported catalog healthcheck test format.")
 
 
-def validate_install_request(user, payload: dict, *, require_public: bool = False) -> tuple[object, dict, Plan]:
+def validate_install_request(
+    user,
+    payload: dict,
+    *,
+    require_public: bool = False,
+) -> tuple[object, dict, dict[str, Plan]]:
     catalog_id = str(payload.get("catalog_id") or "").strip()
     variant_id = str(payload.get("variant") or "").strip()
     name = str(payload.get("name") or "").strip()
     plan_id = payload.get("plan_id")
+    service_plan_ids = payload.get("service_plan_ids")
     config = payload.get("config") or {}
-    if not catalog_id or not variant_id or not name or not plan_id:
-        raise CatalogValidationError("catalog_id, variant, name, plan_id, and config are required.")
+    if not catalog_id or not variant_id or not name or (not plan_id and not service_plan_ids):
+        raise CatalogValidationError(
+            "catalog_id, variant, name, a plan selection, and config are required."
+        )
     if len(name) > 50:
         raise CatalogValidationError("Application name must be 50 characters or fewer.")
     if not isinstance(config, dict):
         raise CatalogValidationError("config must be an object.")
+    if service_plan_ids is not None and not isinstance(service_plan_ids, dict):
+        raise CatalogValidationError("service_plan_ids must be an object keyed by service key.")
+
     definition = ApplicationCatalog.get(catalog_id)
     if require_public and not is_public_definition(definition):
         raise CatalogValidationError("This application is not available in the Ready Apps catalog.")
-    resolved = prepare_application_resolution(definition, variant_id, name, config, public=require_public)
-    plan = Plan.objects.filter(pk=plan_id).first()
-    if not plan or str(plan.platform) != "docker":
-        raise CatalogValidationError("Selected plan must be a Docker application/ready-made plan.")
-    resource_summary_for_resolved(resolved, plan)
-    return definition, resolved, plan
+    resolved = prepare_application_resolution(
+        definition, variant_id, name, config, public=require_public
+    )
+
+    base_plan = Plan.objects.filter(pk=plan_id).first() if plan_id else None
+    if plan_id and (
+        base_plan is None
+        or str(base_plan.platform).strip().lower() != "docker"
+        or str(base_plan.plan_type) not in {
+            str(PlanTypeChoices.APP),
+            str(PlanTypeChoices.READY),
+        }
+    ):
+        raise CatalogValidationError("The fallback plan must be a Docker application/ready-made plan.")
+
+    service_plans = _resolve_service_plans(
+        resolved,
+        base_plan=base_plan,
+        service_plan_ids=service_plan_ids,
+    )
+    resource_summary_for_resolved(resolved, service_plans=service_plans)
+    return definition, resolved, service_plans
 
 
 def _create_application_installation(
@@ -453,7 +569,9 @@ def _create_application_installation(
     *,
     require_public: bool = False,
 ) -> ApplicationInstance:
-    definition, resolved, base_plan = validate_install_request(user, payload, require_public=require_public)
+    definition, resolved, service_plans = validate_install_request(
+        user, payload, require_public=require_public
+    )
     requested_name = str(payload["name"]).strip()
     slug = safe_slug(requested_name)
     existing = ApplicationInstance.objects.filter(user=user, slug=slug).only("pk").first()
@@ -494,6 +612,7 @@ def _create_application_installation(
                                 "role": str(spec.get("role") or "app"),
                                 "platform": str(spec.get("platform") or "docker"),
                                 "plan_type": str(spec.get("plan_type") or PlanTypeChoices.APP),
+                                "plan_id": str(service_plans[str(spec["key"])].pk),
                                 "depends_on": [str(dep) for dep in (spec.get("depends_on") or [])],
                                 "replicas": int(spec.get("replicas") or 1),
                                 "required": bool(spec.get("required", True)),
@@ -531,7 +650,7 @@ def _create_application_installation(
         key = str(spec["key"])
         platform = str(spec["platform"])
         plan_type = str(spec.get("plan_type") or PlanTypeChoices.APP)
-        plan = _find_plan(base_plan=base_plan, platform=platform, plan_type=plan_type)
+        plan = service_plans[key]
 
         # Service.name is globally unique. The existence check in
         # _catalog_service_name() cannot by itself prevent two concurrent

@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from core.global_settings.config import PlanTypeChoices
 from auth_users.authentication import SessionJWTAuthentication as JWTAuthentication
 from core.throttling import GlobalIPRateThrottle, GlobalUserRateThrottle, UserScopedRateThrottle
 from .catalog import ApplicationCatalog, CatalogValidationError
@@ -126,11 +127,14 @@ class CatalogResolveAPIView(CatalogPermissionMixin, APIView):
 
             name = str(request.data.get("name") or "").strip()
             plan_id = request.data.get("plan_id")
+            service_plan_ids = request.data.get("service_plan_ids")
             variant = str(request.data.get("variant") or "").strip()
             config = request.data.get("config") or {}
 
-            if not name or not plan_id or not variant:
-                raise CatalogValidationError("name, plan_id, variant, and config are required.")
+            if not name or not (plan_id or service_plan_ids) or not variant:
+                raise CatalogValidationError(
+                    "name, variant, and a plan selection for every service are required."
+                )
             if not isinstance(config, dict):
                 raise CatalogValidationError("config must be an object.")
 
@@ -143,11 +147,22 @@ class CatalogResolveAPIView(CatalogPermissionMixin, APIView):
             )
 
             from plans.models import Plan
-            plan = Plan.objects.filter(pk=plan_id).first()
-            if not plan or str(plan.platform) != "docker":
-                raise CatalogValidationError("Selected plan must be a Docker application/ready-made plan.")
+            plan = Plan.objects.filter(pk=plan_id).first() if plan_id else None
+            if plan_id and (
+                not plan
+                or str(plan.platform).strip().lower() != "docker"
+                or str(plan.plan_type) not in {
+                    str(PlanTypeChoices.APP),
+                    str(PlanTypeChoices.READY),
+                }
+            ):
+                raise CatalogValidationError("The fallback plan must be a Docker application/ready-made plan.")
 
-            resource_summary = resource_summary_for_resolved(resolved, plan)
+            resource_summary = resource_summary_for_resolved(
+                resolved,
+                plan,
+                service_plan_ids=service_plan_ids,
+            )
             return Response(public_resolution_payload(definition, resolved, resource_summary))
         except (KeyError, CatalogValidationError) as exc:
             return Response({"error": str(exc)}, status=400)

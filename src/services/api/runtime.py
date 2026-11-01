@@ -41,6 +41,17 @@ from docker.errors import NotFound as DockerNotFound
 
 logger = logging.getLogger(__name__)
 
+def _sync_ready_app_parent_status(service_id):
+    try:
+        from app_catalog.lifecycle import sync_application_status_for_service
+        sync_application_status_for_service(service_id)
+    except Exception:
+        logger.exception(
+            "Ready App parent status synchronization failed for child service=%s",
+            service_id,
+        )
+
+
 
 def _invalidate_service_cache_soft(user_id):
     """Invalidate service list/detail cache without making start/stop fail."""
@@ -442,6 +453,9 @@ def start_service_apiview(request):
                 "status", "deploy_started", "task_id",
                 "desired_state", "lifecycle_generation",
             ])
+            transaction.on_commit(
+                lambda sid=service_item.pk: _sync_ready_app_parent_status(sid)
+            )
 
             Deploy.objects.filter(pk=deploy_item.pk).update(
                 status="pending",
@@ -614,6 +628,9 @@ def stop_service_apiview(request):
                     "status", "task_id", "deploy_started",
                     "desired_state", "lifecycle_generation",
                 ]
+            )
+            transaction.on_commit(
+                lambda sid=service_item.pk: _sync_ready_app_parent_status(sid)
             )
 
             transaction.on_commit(

@@ -184,7 +184,7 @@ class ReadyAppRuntimeSupervisorTests(TestCase):
 
         instance.refresh_from_db()
         self.assertEqual(result["status"], "degraded")
-        self.assertEqual(instance.status, ApplicationStatus.RUNNING)
+        self.assertEqual(instance.status, ApplicationStatus.DEGRADED)
         self.assertEqual(instance.stage, "runtime_reconciling")
         self.assertEqual(instance.error_code, "APPLICATION_RUNTIME_DEGRADED")
         self.assertIn("required child deployment is failed", instance.error_message)
@@ -219,3 +219,95 @@ class ReadyAppRuntimeSupervisorTests(TestCase):
         self.assertEqual(instance.status, ApplicationStatus.FAILED)
         self.assertEqual(instance.error_code, "APPLICATION_STATE_CORRUPTED")
         self.assertIn("different private network", instance.error_message)
+
+
+    def test_parent_ready_app_becomes_stopped_when_its_only_child_is_stopped(self):
+        from app_catalog.lifecycle import sync_application_status_for_service
+
+        instance, service, _deploy, _network = self._application()
+        Service.objects.filter(pk=service.pk).update(
+            status="stopped",
+            desired_state="stopped",
+        )
+
+        result = sync_application_status_for_service(service.pk)
+
+        instance.refresh_from_db()
+        self.assertEqual(result, "stopped")
+        self.assertEqual(instance.status, ApplicationStatus.STOPPED)
+        self.assertEqual(instance.stage, "application_stopped")
+
+    def test_parent_ready_app_becomes_degraded_when_one_of_multiple_children_stops(self):
+        from app_catalog.lifecycle import sync_application_status_for_service
+
+        instance, service, _deploy, network = self._application()
+        second = Service.objects.create(
+            name="supervised-worker",
+            user=self.user,
+            plan=self.plan,
+            network=network,
+            status="running",
+            desired_state="running",
+            source_kind=Service.SourceKind.CATALOG,
+            source_config={"application_instance": str(instance.pk)},
+        )
+        second_deploy = Deploy.objects.create(
+            name="supervised-worker-deploy",
+            service=second,
+            created_by=self.user,
+            status=DeploymentStatusChoices.SUCCEEDED,
+            stage="deployment_completed",
+            progress=100,
+            status_message="Deployment succeeded.",
+        )
+        ApplicationInstanceService.objects.create(
+            instance=instance,
+            service=second,
+            deploy=second_deploy,
+            service_key="worker",
+            sequence=1,
+        )
+        Service.objects.filter(pk=service.pk).update(
+            status="stopped",
+            desired_state="stopped",
+        )
+
+        result = sync_application_status_for_service(service.pk)
+
+        instance.refresh_from_db()
+        self.assertEqual(result, "degraded")
+        self.assertEqual(instance.status, ApplicationStatus.DEGRADED)
+        self.assertEqual(instance.stage, "runtime_reconciling")
+
+    def test_parent_ready_app_recovers_to_running_when_every_child_is_running(self):
+        from app_catalog.lifecycle import sync_application_status_for_service
+
+        instance, service, _deploy, _network = self._application()
+        instance.status = ApplicationStatus.STOPPED
+        instance.stage = "application_stopped"
+        instance.save(update_fields=["status", "stage", "updated_at"])
+        Service.objects.filter(pk=service.pk).update(
+            status="running",
+            desired_state="running",
+        )
+
+        result = sync_application_status_for_service(service.pk)
+
+        instance.refresh_from_db()
+        self.assertEqual(result, "running")
+        self.assertEqual(instance.status, ApplicationStatus.RUNNING)
+        self.assertEqual(instance.stage, "application_ready")
+
+    def test_supervisor_promotes_all_stopped_children_to_parent_stopped(self):
+        instance, service, _deploy, _network = self._application()
+        Service.objects.filter(pk=service.pk).update(
+            status="stopped",
+            desired_state="stopped",
+        )
+
+        result = ApplicationStackExecutor(str(instance.pk)).supervise_runtime()
+
+        instance.refresh_from_db()
+        self.assertEqual(result["status"], "stopped")
+        self.assertEqual(instance.status, ApplicationStatus.STOPPED)
+        self.assertEqual(instance.stage, "application_stopped")

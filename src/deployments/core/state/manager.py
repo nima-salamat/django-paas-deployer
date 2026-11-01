@@ -30,6 +30,17 @@ from deployments.common.exceptions import InvalidServiceStateError
 logger = logging.getLogger(__name__)
 
 
+def _sync_ready_app_parent_status(service_id) -> None:
+    try:
+        from app_catalog.lifecycle import sync_application_status_for_service
+        sync_application_status_for_service(service_id)
+    except Exception:
+        logger.exception(
+            "Ready App parent status synchronization failed for child service=%s",
+            service_id,
+        )
+
+
 def _invalidate_service_cache(user_id) -> None:
     try:
         from core.app_cache import invalidate_user_services
@@ -122,6 +133,9 @@ class StateManager:
             user_id = service.user_id
             transaction.on_commit(
                 lambda user_id=user_id: _invalidate_service_cache(user_id)
+            )
+            transaction.on_commit(
+                lambda sid=service_id: _sync_ready_app_parent_status(sid)
             )
             logger.info(
                 "StateManager: service %s %s -> %s",

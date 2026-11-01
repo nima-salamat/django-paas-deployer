@@ -940,7 +940,11 @@ class ApplicationStackExecutor:
         # while its resources are being removed. Do not report that cleanup
         # transition as runtime corruption.
         if (
-            current.status != ApplicationStatus.RUNNING
+            current.status not in {
+                ApplicationStatus.RUNNING,
+                ApplicationStatus.DEGRADED,
+                ApplicationStatus.STOPPED,
+            }
             or current.stage == "deletion_pending"
         ):
             return {"status": "skipped", "application_status": str(current.status)}
@@ -961,7 +965,11 @@ class ApplicationStackExecutor:
                     .filter(pk=self.instance_id)
                     .first()
                 )
-                if locked and locked.status == ApplicationStatus.RUNNING and locked.stage != "deletion_pending":
+                if locked and locked.status in {
+                    ApplicationStatus.RUNNING,
+                    ApplicationStatus.DEGRADED,
+                    ApplicationStatus.STOPPED,
+                } and locked.stage != "deletion_pending":
                     locked.status = ApplicationStatus.FAILED
                     locked.stage = "state_corrupted"
                     locked.error_code = "APPLICATION_STATE_CORRUPTED"
@@ -1015,7 +1023,11 @@ class ApplicationStackExecutor:
                     .filter(pk=self.instance_id)
                     .first()
                 )
-                if locked and locked.status == ApplicationStatus.RUNNING and locked.stage != "deletion_pending":
+                if locked and locked.status in {
+                    ApplicationStatus.RUNNING,
+                    ApplicationStatus.DEGRADED,
+                    ApplicationStatus.STOPPED,
+                } and locked.stage != "deletion_pending":
                     locked.status = ApplicationStatus.FAILED
                     locked.stage = "state_corrupted"
                     locked.error_code = "APPLICATION_STATE_CORRUPTED"
@@ -1086,31 +1098,56 @@ class ApplicationStackExecutor:
                 .filter(pk=self.instance_id)
                 .first()
             )
-            if not locked or locked.status != ApplicationStatus.RUNNING or locked.stage == "deletion_pending":
+            if (
+                not locked
+                or locked.status not in {
+                    ApplicationStatus.RUNNING,
+                    ApplicationStatus.DEGRADED,
+                    ApplicationStatus.STOPPED,
+                }
+                or locked.stage == "deletion_pending"
+            ):
                 return {"status": "skipped"}
 
+            all_children_stopped = bool(bindings) and all(
+                str(binding.service.status or "").lower() == "stopped"
+                and str(binding.service.desired_state or "").lower() == "stopped"
+                for binding in bindings
+            )
+
+            if all_children_stopped:
+                locked.status = ApplicationStatus.STOPPED
+                locked.stage = "application_stopped"
+                locked.error_code = ""
+                locked.error_message = ""
+                locked.save(update_fields=[
+                    "status", "stage", "error_code", "error_message", "updated_at",
+                ])
+                return {"status": "stopped"}
+
             if runtime_issues:
+                locked.status = ApplicationStatus.DEGRADED
                 locked.stage = "runtime_reconciling"
                 locked.error_code = "APPLICATION_RUNTIME_DEGRADED"
                 locked.error_message = (
-                    "Ready App runtime is temporarily degraded; the deployment "
-                    "monitor is reconciling child services. "
-                    + "; ".join(runtime_issues[:5])
+                    "Ready App is degraded because one or more child services are "
+                    "not running as requested. " + "; ".join(runtime_issues[:5])
                 )
                 locked.save(update_fields=[
-                    "stage", "error_code", "error_message", "updated_at",
+                    "status", "stage", "error_code", "error_message", "updated_at",
                 ])
                 return {
                     "status": "degraded",
                     "issues": runtime_issues,
                 }
 
+            locked.status = ApplicationStatus.RUNNING
             locked.stage = "application_ready"
             locked.error_code = ""
             locked.error_message = ""
             locked.deployed_at = locked.deployed_at or timezone.now()
             locked.save(update_fields=[
-                "stage", "error_code", "error_message", "deployed_at", "updated_at",
+                "status", "stage", "error_code", "error_message", "deployed_at", "updated_at",
             ])
             return {"status": "healthy"}
     

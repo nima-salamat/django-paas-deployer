@@ -138,6 +138,79 @@ class ReadyAppPublicApiTests(TestCase):
         self.assertNotIn("apps.example.test", str(response.data))
         self.assertNotIn("image", str(response.data).lower())
 
+    def test_resolve_accepts_a_distinct_plan_for_every_child_service(self):
+        response = CatalogResolveAPIView.as_view()(
+            self.request(
+                "POST",
+                "/api/application-catalog/apps/wordpress/resolve/",
+                {
+                    "name": "per-service-plans",
+                    "service_plan_ids": {
+                        "wordpress": str(self.app_plan.pk),
+                        "mariadb": str(self.mariadb_plan.pk),
+                    },
+                    "variant": "default",
+                    "config": {},
+                },
+            ),
+            catalog_id="wordpress",
+        )
+        self.assertEqual(response.status_code, 200)
+        services = {
+            row["key"]: row
+            for row in response.data["resource_summary"]["services"]
+        }
+        self.assertEqual(services["wordpress"]["plan_id"], str(self.app_plan.pk))
+        self.assertEqual(services["mariadb"]["plan_id"], str(self.mariadb_plan.pk))
+        self.assertEqual(services["wordpress"]["plan"]["platform"], "docker")
+        self.assertEqual(services["mariadb"]["plan"]["platform"], "mariadb")
+
+    def test_resolve_rejects_a_child_plan_with_the_wrong_platform(self):
+        response = CatalogResolveAPIView.as_view()(
+            self.request(
+                "POST",
+                "/api/application-catalog/apps/wordpress/resolve/",
+                {
+                    "name": "bad-per-service-plan",
+                    "service_plan_ids": {
+                        "wordpress": str(self.app_plan.pk),
+                        "mariadb": str(self.app_plan.pk),
+                    },
+                    "variant": "default",
+                    "config": {},
+                },
+            ),
+            catalog_id="wordpress",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("must match", response.data["error"])
+
+    def test_installation_materializes_each_selected_child_plan(self):
+        from app_catalog.services import create_application_installation
+
+        instance = create_application_installation(
+            self.user,
+            {
+                "catalog_id": "wordpress",
+                "variant": "default",
+                "name": "installed-per-service-plans",
+                "service_plan_ids": {
+                    "wordpress": str(self.app_plan.pk),
+                    "mariadb": str(self.mariadb_plan.pk),
+                },
+                "config": {},
+            },
+            require_public=True,
+        )
+        self.assertEqual(
+            instance.services.get(service_key="wordpress").service.plan_id,
+            self.app_plan.pk,
+        )
+        self.assertEqual(
+            instance.services.get(service_key="mariadb").service.plan_id,
+            self.mariadb_plan.pk,
+        )
+
     @override_settings(DEPLOYMENT_DOMAIN="apps.example.test")
     def test_ready_app_public_hostname_uses_created_service_id(self):
         from app_catalog.services import create_application_installation
