@@ -223,6 +223,8 @@ def start_service_apiview(request):
                 not force_rebuild
                 and swarm_enabled()
                 and service_item.status in (
+                    SERVICE_STATUS_CHOICES.RUNNING,
+                    SERVICE_STATUS_CHOICES.SUCCEEDED,
                     SERVICE_STATUS_CHOICES.FAILED,
                     SERVICE_STATUS_CHOICES.STOPPED,
                 )
@@ -264,20 +266,29 @@ def start_service_apiview(request):
                     from services.lifecycle import bump_lifecycle
                     from deployments.core.state.manager import StateManager
 
-                    lifecycle_generation = bump_lifecycle(
-                        service_item.pk, desired_state="running"
-                    )
-                    StateManager.transition_service(
-                        service_item.pk,
-                        SERVICE_STATUS_CHOICES.RUNNING,
-                        update_fields={"desired_state": "running"},
-                    )
-                    service_item.status = SERVICE_STATUS_CHOICES.RUNNING
-                    service_item.desired_state = "running"
-                    service_item.lifecycle_generation = lifecycle_generation
-                    transaction.on_commit(
-                        lambda: _invalidate_service_cache_soft(request.user.pk)
-                    )
+                    lifecycle_generation = int(service_item.lifecycle_generation or 0)
+                    if (
+                        str(service_item.desired_state or "").lower() != "running"
+                        or service_item.status != SERVICE_STATUS_CHOICES.RUNNING
+                    ):
+                        lifecycle_generation = bump_lifecycle(
+                            service_item.pk, desired_state="running"
+                        )
+                        if service_item.status != SERVICE_STATUS_CHOICES.RUNNING:
+                            StateManager.transition_service(
+                                service_item.pk,
+                                SERVICE_STATUS_CHOICES.RUNNING,
+                                update_fields={"desired_state": "running"},
+                            )
+                        else:
+                            service_item.desired_state = "running"
+                            service_item.lifecycle_generation = lifecycle_generation
+                            service_item.save(
+                                update_fields=["desired_state", "lifecycle_generation"]
+                            )
+                        transaction.on_commit(
+                            lambda: _invalidate_service_cache_soft(request.user.pk)
+                        )
                     return Response(
                         {
                             "result": "success",
@@ -287,14 +298,18 @@ def start_service_apiview(request):
                             "status": "running",
                             "running": True,
                             "task_id": None,
+                            "replicas_desired": observed.replicas_desired,
+                            "replicas_running": observed.replicas_running,
                         },
                         status=status.HTTP_200_OK,
                     )
 
-            # A start on an already-running service is idempotent. Do not
+            # A start on an already-running legacy Docker service is idempotent.
+            # Swarm services are only considered running after runtime inspection.
             # reset the successful Deploy row or enqueue another deployment.
             if (
                 not force_rebuild
+                and not swarm_enabled()
                 and service_item.status in (
                     SERVICE_STATUS_CHOICES.RUNNING,
                     SERVICE_STATUS_CHOICES.SUCCEEDED,

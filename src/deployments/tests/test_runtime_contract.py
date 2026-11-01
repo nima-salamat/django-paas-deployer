@@ -437,8 +437,10 @@ def test_start_reconciles_legacy_failed_projection_when_swarm_is_still_running()
     )[0]
 
     assert "SERVICE_STATUS_CHOICES.FAILED" in start
+    assert "SERVICE_STATUS_CHOICES.RUNNING" in start
     assert "SwarmRuntime().inspect_service" in start
     assert "observed.replicas_running > 0" in start
+    assert "and not swarm_enabled()" in start
     assert "StateManager.transition_service(" in start
     assert "RUNTIME_STATE_UNKNOWN" in start
     assert "(SERVICE_FAILED, SERVICE_RUNNING)" in state_machine
