@@ -216,6 +216,81 @@ def start_service_apiview(request):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
+            # Older stop workers could mark a Service FAILED even when its
+            # Swarm tasks kept running. Reconcile those legacy projections
+            # before deciding to create another deployment.
+            if (
+                not force_rebuild
+                and swarm_enabled()
+                and service_item.status in (
+                    SERVICE_STATUS_CHOICES.FAILED,
+                    SERVICE_STATUS_CHOICES.STOPPED,
+                )
+            ):
+                try:
+                    observed = SwarmRuntime().inspect_service(
+                        service_item.get_docker_service_name()
+                    )
+                except Exception:
+                    logger.exception(
+                        "Could not verify Swarm runtime before starting service %s; refusing a potentially duplicate deployment.",
+                        service_item.pk,
+                    )
+                    return Response(
+                        {
+                            "result": "error",
+                            "code": "RUNTIME_STATE_UNKNOWN",
+                            "detail": _(
+                                "The current runtime state could not be verified. No new deployment was queued; please retry."
+                            ),
+                        },
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
+
+                if observed is not None and observed.replicas_running > 0:
+                    if observed.replicas_desired <= 0:
+                        return Response(
+                            {
+                                "result": "error",
+                                "code": "RUNTIME_STOP_DRAINING",
+                                "detail": _(
+                                    "The previous stop is still being applied by Swarm. No new deployment was queued; retry after the runtime state settles."
+                                ),
+                                "status": "stopping",
+                            },
+                            status=status.HTTP_409_CONFLICT,
+                        )
+
+                    from services.lifecycle import bump_lifecycle
+                    from deployments.core.state.manager import StateManager
+
+                    lifecycle_generation = bump_lifecycle(
+                        service_item.pk, desired_state="running"
+                    )
+                    StateManager.transition_service(
+                        service_item.pk,
+                        SERVICE_STATUS_CHOICES.RUNNING,
+                        update_fields={"desired_state": "running"},
+                    )
+                    service_item.status = SERVICE_STATUS_CHOICES.RUNNING
+                    service_item.desired_state = "running"
+                    service_item.lifecycle_generation = lifecycle_generation
+                    transaction.on_commit(
+                        lambda: _invalidate_service_cache_soft(request.user.pk)
+                    )
+                    return Response(
+                        {
+                            "result": "success",
+                            "detail": _(
+                                "The service is already running. Its status was synchronized; no new deployment was created."
+                            ),
+                            "status": "running",
+                            "running": True,
+                            "task_id": None,
+                        },
+                        status=status.HTTP_200_OK,
+                    )
+
             # A start on an already-running service is idempotent. Do not
             # reset the successful Deploy row or enqueue another deployment.
             if (

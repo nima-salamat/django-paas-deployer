@@ -422,3 +422,24 @@ def test_stop_failure_preserves_runtime_truth_and_monitor_supports_replica_sets(
     )[0]
     assert "state.replicas_running == state.replicas_desired" in desired_state
     assert "state.replicas_desired > 0" in desired_state
+
+
+def test_start_reconciles_legacy_failed_projection_when_swarm_is_still_running():
+    from pathlib import Path
+
+    src_root = Path(__file__).resolve().parents[2]
+    runtime_api = (src_root / "services" / "api" / "runtime.py").read_text(encoding="utf-8")
+    state_machine = (
+        src_root / "deployments" / "common" / "state_machine.py"
+    ).read_text(encoding="utf-8")
+    start = runtime_api.split("def start_service_apiview", 1)[1].split(
+        "def stop_service_apiview", 1
+    )[0]
+
+    assert "SERVICE_STATUS_CHOICES.FAILED" in start
+    assert "SwarmRuntime().inspect_service" in start
+    assert "observed.replicas_running > 0" in start
+    assert "StateManager.transition_service(" in start
+    assert "RUNTIME_STATE_UNKNOWN" in start
+    assert "(SERVICE_FAILED, SERVICE_RUNNING)" in state_machine
+    assert "The service is already running." in start

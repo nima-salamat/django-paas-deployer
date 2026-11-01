@@ -105,6 +105,8 @@ SERVICE_TRANSITIONS: FrozenSet[tuple[str | None, str]] = frozenset({
     (SERVICE_STOPPING, SERVICE_STOPPED),
     (SERVICE_STOPPING, SERVICE_FAILED),    # stop itself failed
     (SERVICE_STOPPING, SERVICE_RUNNING),   # runtime is still live after a failed stop
+    (SERVICE_FAILED, SERVICE_RUNNING),     # reconcile a failed projection with a live runtime
+    (SERVICE_STOPPED, SERVICE_RUNNING),    # reconcile a stopped projection with a live runtime
 
     # Recovery
     (SERVICE_STOPPED, SERVICE_QUEUED),     # redeploy
