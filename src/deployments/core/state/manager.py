@@ -73,12 +73,14 @@ class StateManager:
         target: str,
         *,
         update_fields: Optional[dict] = None,
+        allow_runtime_reconciliation: bool = False,
     ) -> None:
         """
         Transition a Service to ``target`` with explicit validation.
 
-        Raises ``InvalidServiceStateError`` if the transition is not in
-        the allowed table (unless src == target, which is idempotent).
+        Runtime reconciliation may opt in to restoring an observed-live
+        service from a stale FAILED/STOPPED projection. These recovery edges
+        are intentionally not part of the general lifecycle transition table.
         """
         from services.models import Service  # type: ignore
 
@@ -96,8 +98,14 @@ class StateManager:
                 )
 
             src = service.status
+            runtime_reconciliation = (
+                allow_runtime_reconciliation
+                and target == sm.SERVICE_RUNNING
+                and src in {sm.SERVICE_FAILED, sm.SERVICE_STOPPED}
+            )
             try:
-                sm.check_service_transition(src, target)
+                if not runtime_reconciliation:
+                    sm.check_service_transition(src, target)
             except sm.InvalidTransition as exc:
                 raise InvalidServiceStateError(
                     str(exc),

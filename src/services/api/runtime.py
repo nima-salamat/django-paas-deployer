@@ -290,6 +290,7 @@ def start_service_apiview(request):
                                 service_item.pk,
                                 SERVICE_STATUS_CHOICES.RUNNING,
                                 update_fields={"desired_state": "running"},
+                                allow_runtime_reconciliation=True,
                             )
                         else:
                             service_item.desired_state = "running"
