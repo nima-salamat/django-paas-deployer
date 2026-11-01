@@ -1,3 +1,4 @@
+from datetime import datetime, timezone as datetime_timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -52,6 +53,10 @@ class DeploymentEventPipelineTests(SimpleTestCase):
         self.assertEqual(payload["event"], "deployment.validation.info")
         self.assertEqual(payload["message"], "validated token=[REDACTED]")
         self.assertEqual(payload["details"]["authorization"], "[REDACTED]")
+        self.assertEqual(
+            datetime.fromisoformat(payload["timestamp"]).utcoffset(),
+            datetime_timezone.utc.utcoffset(None),
+        )
         objects.create.assert_called_once()
         event = objects.create.call_args.kwargs
         self.assertEqual(event["deployment_id"], "deploy-1")

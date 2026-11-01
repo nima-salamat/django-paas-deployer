@@ -12,7 +12,7 @@ import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import timedelta, timezone as datetime_timezone
 from typing import Optional
 
 from django.core.management.base import BaseCommand
@@ -836,7 +836,7 @@ class Command(BaseCommand):
                 raw_ts = f"{head}.{frac}{tz or '+00:00'}"
             ts = parse_datetime(raw_ts)
             if ts and timezone.is_naive(ts):
-                ts = timezone.make_aware(ts, timezone.utc)
+                ts = timezone.make_aware(ts, datetime_timezone.utc)
             msg = parts[1] if len(parts) > 1 else ""
             return ts, msg
         return None, line

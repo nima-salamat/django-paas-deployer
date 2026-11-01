@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as datetime_timezone
 from typing import Iterable
 from uuid import UUID
 
@@ -275,7 +275,7 @@ def _prepare_lines(lines: Iterable[dict], policy: EffectiveLoggingPolicy) -> lis
         if isinstance(ts, str):
             ts = parse_datetime(ts) or timezone.now()
         if timezone.is_naive(ts):
-            ts = timezone.make_aware(ts, timezone.utc)
+            ts = timezone.make_aware(ts, datetime_timezone.utc)
 
         stream_kind = (raw.get("stream") or "stdout").lower()
         if stream_kind not in {"stdout", "stderr"}:

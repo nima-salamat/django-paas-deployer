@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 from django.test import TestCase
@@ -71,6 +72,22 @@ class BulkRuntimeLogIngestionTests(TestCase):
         )
         self.assertEqual(daily.entries_ingested, 2)
         self.assertEqual(daily.bytes_ingested, expected_bytes)
+
+    def test_naive_timestamp_is_normalized_to_utc_before_persisting(self):
+        naive_ts = datetime(2026, 1, 2, 3, 4, 5)
+        result = ingest_lines(
+            self.stream,
+            [{"ts": naive_ts.isoformat(), "stream": "stdout", "message": "naive timestamp"}],
+            policy=self.policy,
+        )
+
+        self.assertEqual(result["inserted"], 1)
+        row = ServiceLogEntry.objects.using("deployment_logs").get(
+            stream_id=self.stream.pk,
+            message="naive timestamp",
+        )
+        self.assertEqual(row.ts.utcoffset(), timedelta(0))
+        self.assertEqual(row.ts.replace(tzinfo=None), naive_ts)
 
     def test_replayed_batch_does_not_consume_quota_twice(self):
         policy = EffectiveLoggingPolicy(

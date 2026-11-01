@@ -3,7 +3,7 @@
 import logging
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone as datetime_timezone
 from typing import Any
 
 from asgiref.sync import async_to_sync
@@ -109,7 +109,7 @@ class DeploymentEventPipeline:
         traceback_text: str = "",
         broadcast: bool = True,
     ) -> dict:
-        timestamp = datetime.now(timezone.utc).isoformat()
+        timestamp = datetime.now(datetime_timezone.utc).isoformat()
         details = sanitize(event.details or {})
         event_type = self._event_type(event)
         payload = {
