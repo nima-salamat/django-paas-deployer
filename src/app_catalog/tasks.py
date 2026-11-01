@@ -229,7 +229,7 @@ def supervise_ready_applications():
 
     return {
         "status": "ok",
-        "checked": healthy + degraded + corrupted + missing,
+        "checked": healthy + degraded + stopped + corrupted + missing,
         "healthy": healthy,
         "degraded": degraded,
         "stopped": stopped,
