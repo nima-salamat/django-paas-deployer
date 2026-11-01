@@ -45,7 +45,7 @@ def _safe_component_list(definition: CatalogDefinition) -> list[dict]:
 
 
 def _public_variant_services(variant: dict) -> list[dict]:
-    """Expose child identity and resource requirements without runtime secrets."""
+    """Expose safe child identity and resource-plan requirements, never secrets."""
     raw_services = variant.get("services") or []
     compose_document = variant.get("compose_document") or {}
     if not raw_services and isinstance(compose_document, dict):
@@ -63,19 +63,69 @@ def _public_variant_services(variant: dict) -> list[dict]:
         key = str(item.get("key") or item.get("service_key") or "").strip()
         if not key:
             continue
-        role = str(item.get("role") or "app")
-        plan_type = str(item.get("plan_type") or ("DB" if role == "database" else "APP")).upper()
+
+        # Built-in Compose catalog definitions use x-passdeployer extensions;
+        # imported Compose documents can use explicit top-level fields. Mirror
+        # compose_to_resolved() here so the wizard displays the same platform
+        # and PlanType that installation will enforce.
+        pd_meta = item.get("x-passdeployer") or {}
+        role = str(pd_meta.get("role") or item.get("role") or "").strip().lower()
+        image_hint = str(item.get("image") or item.get("image_template") or "").lower()
+        database_platform = next(
+            (
+                candidate
+                for marker, candidate in (
+                    ("postgres", "postgresql"),
+                    ("mariadb", "mariadb"),
+                    ("mysql", "mysql"),
+                    ("mongo", "mongodb"),
+                    ("oracle", "oracle"),
+                )
+                if marker in image_hint or marker in key.lower()
+            ),
+            None,
+        )
+        if not role:
+            low = key.lower()
+            if database_platform or any(token in low for token in ("database", "db")):
+                role = "database"
+            elif "redis" in low or "valkey" in low:
+                role = "cache"
+            elif "worker" in low:
+                role = "worker"
+            elif "scheduler" in low or "cron" in low:
+                role = "scheduler"
+            elif bool(pd_meta.get("public")) or bool(item.get("public")):
+                role = "app"
+            else:
+                role = "internal"
+
+        explicit_platform = (
+            pd_meta.get("platform")
+            or item.get("platform")
+        )
+        explicit_plan_type = (
+            pd_meta.get("plan_type")
+            or item.get("plan_type")
+        )
+        if role == "database":
+            platform = str(explicit_platform or database_platform or "").lower()
+            plan_type = str(explicit_plan_type or "DB").upper()
+        else:
+            platform = str(explicit_platform or "docker").lower()
+            plan_type = str(explicit_plan_type or "APP").upper()
+
         try:
-            replicas = max(1, int(item.get("replicas") or 1))
+            replicas = max(1, int(item.get("replicas", pd_meta.get("replicas", 1)) or 1))
         except (TypeError, ValueError):
             replicas = 1
         rows.append({
             "key": key,
-            "label": _display_component_label(item.get("label") or key),
+            "label": _display_component_label(item.get("label") or pd_meta.get("label") or key),
             "role": role,
-            "platform": str(item.get("platform") or ("docker" if plan_type != "DB" else "")).lower(),
+            "platform": platform,
             "plan_type": plan_type,
-            "required": bool(item.get("required", True)),
+            "required": bool(item.get("required", pd_meta.get("required", True))),
             "replicas": replicas,
             "depends_on": _safe_string_list(item.get("depends_on")),
         })

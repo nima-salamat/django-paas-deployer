@@ -96,6 +96,24 @@ class ReadyAppPublicApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 404)
 
+    def test_public_compose_variant_exposes_database_plan_requirements(self):
+        response = CatalogDetailAPIView.as_view()(
+            self.request("GET", "/api/application-catalog/apps/wordpress/"),
+            catalog_id="wordpress",
+        )
+        self.assertEqual(response.status_code, 200)
+        variant = next(
+            item for item in response.data["variants"]
+            if item["id"] == "default"
+        )
+        services = {item["key"]: item for item in variant["services"]}
+
+        self.assertEqual(services["wordpress"]["platform"], "docker")
+        self.assertEqual(services["wordpress"]["plan_type"], "APP")
+        self.assertEqual(services["mariadb"]["role"], "database")
+        self.assertEqual(services["mariadb"]["platform"], "mariadb")
+        self.assertEqual(services["mariadb"]["plan_type"], "DB")
+
     def test_public_detail_hides_runtime_authoring_details_and_domain_field(self):
         response = CatalogDetailAPIView.as_view()(
             self.request("GET", "/api/application-catalog/apps/grafana/"),
