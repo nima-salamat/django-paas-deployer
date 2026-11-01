@@ -39,13 +39,16 @@ See [ready-apps.md](ready-apps.md) for the full source metadata contract, hostna
 ```json
 {
   "name": "my-app",
-  "plan_id": "<uuid>",
+  "service_plan_ids": {
+    "web": "<docker-app-plan-uuid>",
+    "database": "<database-plan-uuid>"
+  },
   "variant": "default",
   "config": {}
 }
 ```
 
-The backend requires non-empty name, plan id and variant, with config represented as an object.
+The backend requires a name, variant and object config. New Ready Apps send one `service_plan_ids` entry for every child service key. The older single `plan_id` field remains a compatibility fallback; the backend resolves database children separately when that legacy field is used.
 
 ### Resolution behavior
 
@@ -55,9 +58,9 @@ The resolver:
 2. validates the variant and configuration;
 3. applies defaults and generated values;
 4. applies the platform-managed HTTPS hostname;
-5. validates the selected Docker APP/READY plan;
-6. selects the configured database plan for database child services;
-7. checks per-service and aggregate storage/resource constraints;
+5. validates a plan for every child service, including platform and plan type;
+6. preserves the selected plan ID on the matching child service;
+7. checks per-service storage and computes aggregate resource totals;
 8. returns a safe preview.
 
 The response contains application provenance, normalized safe configuration, generated non-secret field information, managed components, resource summary, public endpoints, outputs and warnings. Secret plaintext is never returned.
@@ -81,7 +84,10 @@ The resource summary has aggregate and per-service allocation. Aggregate fields 
   "catalog_id": "wordpress",
   "variant": "default",
   "name": "my-wordpress",
-  "plan_id": "<uuid>",
+  "service_plan_ids": {
+    "wordpress": "<docker-app-plan-uuid>",
+    "mariadb": "<mariadb-db-plan-uuid>"
+  },
   "config": {}
 }
 ```
@@ -144,6 +150,17 @@ A completed cleanup returns HTTP `204`.
 | Delete while cleanup remains pending | 202 | `application_cleanup_pending` |
 | Delete after cleanup converges | 204 | installation removed |
 
+## Ready App aggregate lifecycle
+
+Child Service status is serialized separately from the child Deploy status. A Service transition triggers parent status synchronization after commit:
+
+- all required children intentionally stopped → parent `stopped`;
+- all required children running with successful Deploys → parent `running`;
+- any mixed/partially stopped or degraded child state → parent `degraded`;
+- installation orchestration states (`pending`, `deploying`) and terminal failures/cancellation are not overwritten by a child projection.
+
+The periodic Ready App supervisor also evaluates `running`, `degraded` and `stopped` installations, so an interrupted or stale parent projection can converge.
+
 ## Idempotency/concurrency
 
 The coordinator stores execution/dispatch task ids and dispatch timestamps. Reconciliation can recover lost task delivery without blindly duplicating child creation.
@@ -160,10 +177,10 @@ Generated and user-supplied secrets are materialized through the existing Servic
 
 ## Resource policy
 
-The selected Docker APP/READY plan is reused for application-role children. Database-role children select the first configured database plan matching the declared database platform.
+Each child service has its own selected resource plan. The backend validates the selected plan's platform and plan type against the immutable service definition, persists the chosen plan ID in the installation snapshot, and returns the plan beside the service in the resource preview and installation detail. The legacy single `plan_id` request remains supported as a fallback for older clients.
 
 A catalog volume without an explicit size resolves to 1024 MB. Storage is checked against the assigned plan limit. The resource preview is therefore authoritative and must not be recreated in client code.
 
 ## Source
 
-Primary implementation: `src/app_catalog/apis.py`, `src/app_catalog/serializers.py`, `src/app_catalog/services.py`, `src/app_catalog/catalog.py`, `src/app_catalog/source_loader.py`, `src/app_catalog/tasks.py`, `src/app_catalog/executor.py`, `src/app_catalog/urls.py`.
+Primary implementation: `src/app_catalog/apis.py`, `src/app_catalog/serializers.py`, `src/app_catalog/services.py`, `src/app_catalog/catalog.py`, `src/app_catalog/source_loader.py`, `src/app_catalog/tasks.py`, `src/app_catalog/executor.py`, `src/app_catalog/lifecycle.py`, `src/app_catalog/urls.py`.

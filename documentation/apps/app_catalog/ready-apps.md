@@ -140,9 +140,9 @@ The frontend never calculates the executable topology.
 3. validates name, variant and config shape;
 4. resolves defaults and generated values;
 5. applies platform-owned host configuration;
-6. validates the selected Docker APP/READY plan;
-7. finds the required database plan for database child services;
-8. validates resource/storage limits;
+6. exposes the child service keys and their platform/plan-type requirements;
+7. validates the selected resource plan independently for every child service;
+8. validates per-service storage limits and computes aggregate resources;
 9. returns a safe preview.
 
 The preview and installation therefore share the same backend policy rather than duplicating business rules in React.
@@ -174,7 +174,10 @@ Request:
 ```json
 {
   "name": "my-wordpress",
-  "plan_id": "<uuid>",
+  "service_plan_ids": {
+    "wordpress": "<docker-app-plan-uuid>",
+    "mariadb": "<mariadb-db-plan-uuid>"
+  },
   "variant": "default",
   "config": {}
 }
@@ -209,7 +212,10 @@ Request:
   "catalog_id": "wordpress",
   "variant": "default",
   "name": "my-wordpress",
-  "plan_id": "<uuid>",
+  "service_plan_ids": {
+    "wordpress": "<docker-app-plan-uuid>",
+    "mariadb": "<mariadb-db-plan-uuid>"
+  },
   "config": {}
 }
 ```
@@ -312,9 +318,9 @@ Do not place passwords, tokens or generated credentials in normal catalog DTOs o
 
 ## Resource allocation
 
-The selected Docker APP/READY plan is reused for application-role child services.
+Every child service has an independent selected plan. The frontend shows only plans matching that child's declared platform and plan type. Resolve and Install both submit the `service_plan_ids` mapping keyed by the exact child service keys.
 
-Database-role services select the configured DB plan matching their declared database platform.
+The backend validates every entry, persists the selected plan ID into the immutable installation snapshot, and materializes the matching Plan on that child Service. The older single `plan_id` input remains a compatibility fallback for clients that have not moved to the per-service map.
 
 Preview values describe plan limits, not current runtime usage:
 
@@ -348,13 +354,15 @@ Service names remain globally unique and are limited to 30 characters. When a na
 |---|---|
 | `pending` | Installation exists; orchestration has not completed |
 | `deploying` | Child services are being advanced |
-| `running` | Required child services reached the successful condition |
+| `running` | All required child services are running with successful Deploys |
+| `degraded` | At least one required child is stopped, failed, or otherwise not running as requested |
+| `stopped` | Every child service is intentionally stopped |
 | `failed` | Required child work or orchestration failed |
 | `cancelled` | Installation was intentionally cancelled |
 
 `stage` is finer-grained coordinator progress, not a replacement for `status`.
 
-Coordinator state and child Deploy state remain separate.
+Coordinator state and child Deploy state remain separate. The parent status is a lifecycle projection of its child Services: a committed child transition updates the parent after the database transaction; the periodic supervisor repairs any stale aggregate state. A stopped or partially stopped Ready App is not reported as a deployment failure.
 
 ## Current curated MVP
 
