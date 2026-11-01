@@ -995,13 +995,23 @@ def _reconcile_desired_state(service: Service) -> bool:
         runtime = SwarmRuntime()
         try:
             state = runtime.inspect_service(service.get_docker_service_name())
-            running = bool(state and state.replicas_running == 1)
+            running = bool(
+                state
+                and state.replicas_desired > 0
+                and state.replicas_running == state.replicas_desired
+            )
         except Exception as exc:
             logger.warning("Swarm desired-state inspection failed for service %s: %s", service.pk, exc)
             return False
         desired = str(getattr(service, "desired_state", "stopped") or "stopped").lower()
         if desired == "stopped":
-            if not running:
+            # A service with desired replicas but no running task is still an
+            # active Swarm resource and must be scaled to zero.
+            stop_needed = bool(
+                state
+                and (state.replicas_desired > 0 or state.replicas_running > 0)
+            )
+            if not stop_needed:
                 return False
             if service.status != SERVICE_STATUS_CHOICES.STOPPING:
                 try:

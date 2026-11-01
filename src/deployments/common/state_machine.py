@@ -104,6 +104,7 @@ SERVICE_TRANSITIONS: FrozenSet[tuple[str | None, str]] = frozenset({
     (SERVICE_FAILED, SERVICE_STOPPING),    # operator stops a failed service
     (SERVICE_STOPPING, SERVICE_STOPPED),
     (SERVICE_STOPPING, SERVICE_FAILED),    # stop itself failed
+    (SERVICE_STOPPING, SERVICE_RUNNING),   # runtime is still live after a failed stop
 
     # Recovery
     (SERVICE_STOPPED, SERVICE_QUEUED),     # redeploy

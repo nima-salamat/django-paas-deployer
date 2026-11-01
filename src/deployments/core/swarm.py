@@ -3118,7 +3118,8 @@ class SwarmRuntime:
             service = self.client.services.get(_validate_service_name(name))
             service.reload()
             self._assert_service_owned(service, service_id=service_id)
-            service.scale(0)
+            # Use the same versioned Swarm update path as other replica changes.
+            self.scale_service(name, 0, timeout=0.0)
         except docker.errors.NotFound:
             return
 
@@ -3186,8 +3187,28 @@ class SwarmRuntime:
         return states
 
     def stop_service_group(self, service_id: str) -> None:
+        """Scale every managed process to zero, attempting all even on errors."""
+        failures: list[dict[str, str]] = []
         for name in self.service_names_for_service(service_id):
-            self.stop(name)
+            try:
+                self.stop(name, service_id=str(service_id))
+            except Exception as exc:
+                failures.append({
+                    "service": str(name),
+                    "error": str(exc) or type(exc).__name__,
+                    "error_type": type(exc).__name__,
+                })
+        if failures:
+            raise DeploymentError(
+                f"Unable to stop every Swarm process for service {service_id!r}.",
+                stage="swarm_stop",
+                code="SWARM_GROUP_STOP_FAILED",
+                recoverable=True,
+                details={
+                    "service_id": str(service_id),
+                    "failed_services": failures,
+                },
+            )
 
     def remove_service_group(self, service_id: str, *, timeout: float = 30.0) -> None:
         """Remove every managed Swarm service and wait for its task containers to stop.
@@ -3438,7 +3459,11 @@ class SwarmRuntime:
         state = self.inspect_service(name)
         result: dict[str, Any] = {
             "exists": state is not None,
-            "running": bool(state and state.replicas_running == 1),
+            "running": bool(
+                state
+                and state.replicas_desired > 0
+                and state.replicas_running == state.replicas_desired
+            ),
             "replicas_desired": state.replicas_desired if state else 0,
             "replicas_running": state.replicas_running if state else 0,
             "tasks": [task.__dict__ for task in (state.tasks if state else ())],

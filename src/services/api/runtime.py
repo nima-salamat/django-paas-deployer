@@ -216,6 +216,40 @@ def start_service_apiview(request):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
+            # A start on an already-running service is idempotent. Do not
+            # reset the successful Deploy row or enqueue another deployment.
+            if (
+                not force_rebuild
+                and service_item.status in (
+                    SERVICE_STATUS_CHOICES.RUNNING,
+                    SERVICE_STATUS_CHOICES.SUCCEEDED,
+                )
+            ):
+                if str(service_item.desired_state or "").lower() != "running":
+                    from services.lifecycle import bump_lifecycle
+
+                    lifecycle_generation = bump_lifecycle(
+                        service_item.pk, desired_state="running"
+                    )
+                    service_item.desired_state = "running"
+                    service_item.lifecycle_generation = lifecycle_generation
+                    service_item.save(
+                        update_fields=["desired_state", "lifecycle_generation"]
+                    )
+                    transaction.on_commit(
+                        lambda: _invalidate_service_cache_soft(request.user.pk)
+                    )
+                return Response(
+                    {
+                        "result": "success",
+                        "detail": _("Service is already running."),
+                        "status": "running",
+                        "running": True,
+                        "task_id": None,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
             deploy_item = get_active_deploy(service_item)
             if deploy_item is None:
                 # Compatibility bridge for services created before the
@@ -432,6 +466,32 @@ def stop_service_apiview(request):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
+            if (
+                service_item.status == SERVICE_STATUS_CHOICES.STOPPING
+                and str(service_item.desired_state or "").lower() == "stopped"
+            ):
+                return Response(
+                    {
+                        "result": "success",
+                        "detail": _("Service stop is already in progress."),
+                        "status": "stopping",
+                        "task_id": str(service_item.task_id or ""),
+                    },
+                    status=status.HTTP_202_ACCEPTED,
+                )
+            if (
+                service_item.status == SERVICE_STATUS_CHOICES.STOPPED
+                and str(service_item.desired_state or "").lower() == "stopped"
+            ):
+                return Response(
+                    {
+                        "result": "success",
+                        "detail": _("Service is already stopped."),
+                        "status": "stopped",
+                        "task_id": None,
+                    },
+                    status=status.HTTP_200_OK,
+                )
             if service_item.status in (
                 SERVICE_STATUS_CHOICES.QUEUED,
                 SERVICE_STATUS_CHOICES.DEPLOYING,
@@ -468,7 +528,11 @@ def stop_service_apiview(request):
 
             transaction.on_commit(
                 lambda: stop_service.apply_async(
-                    args=[str(service_id)], task_id=custom_task_id
+                    args=[str(service_id)],
+                    kwargs={
+                        "expected_lifecycle_generation": lifecycle_generation,
+                    },
+                    task_id=custom_task_id,
                 )
             )
 
@@ -495,7 +559,7 @@ def stop_service_apiview(request):
         )
 
     return Response(
-        {"result": "success", "detail": _("Service stopped.")},
+        {"result": "success", "detail": _("Service stop requested.")},
         status=status.HTTP_202_ACCEPTED,
     )
 

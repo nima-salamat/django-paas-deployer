@@ -323,3 +323,102 @@ def test_swarm_inspection_does_not_treat_an_unlabelled_external_service_as_curre
     observed = adapter.inspect(identity)
 
     assert observed.identity.revision_id is None
+
+
+def test_swarm_adapter_stop_scales_the_complete_service_group():
+    class GroupRuntime(_StubSwarmRuntime):
+        def __init__(self):
+            super().__init__()
+            self.stopped_groups = []
+
+        def stop_service_group(self, service_id):
+            self.stopped_groups.append(str(service_id))
+
+    from deployments.runtime.contract import RuntimeHandle
+
+    runtime = GroupRuntime()
+    adapter = SwarmRuntimeAdapter(runtime=runtime, operator_enabled=True)
+    identity = RuntimeIdentity(
+        service_id="service-1",
+        deployment_id="deployment-1",
+        revision_id="revision-1",
+        runtime_name="app-service-1",
+    )
+    handle = RuntimeHandle(
+        backend="swarm",
+        identity=identity,
+        runtime_id="swarm-service-1",
+        resource_name="app-service-1",
+    )
+
+    result = adapter.stop(handle, operation_key="service-1/stop")
+
+    assert result.success is True
+    assert runtime.stopped_groups == ["service-1"]
+
+
+def test_swarm_adapter_maps_zero_desired_replicas_to_stopped():
+    from dataclasses import replace
+
+    runtime = _StubSwarmRuntime()
+    runtime.state = replace(
+        runtime.state,
+        replicas_desired=0,
+        replicas_running=0,
+        tasks=(),
+    )
+    adapter = SwarmRuntimeAdapter(runtime=runtime, operator_enabled=True)
+    identity = RuntimeIdentity(
+        service_id="service-1",
+        runtime_name="app-service-1",
+    )
+
+    observation = adapter.inspect(identity)
+
+    assert observation.status.value == "stopped"
+
+
+def test_service_lifecycle_api_stop_and_start_are_idempotent_and_fenced():
+    from pathlib import Path
+
+    src_root = Path(__file__).resolve().parents[2]
+    runtime_api = (src_root / "services" / "api" / "runtime.py").read_text(encoding="utf-8")
+    start = runtime_api.split("def start_service_apiview", 1)[1].split(
+        "def stop_service_apiview", 1
+    )[0]
+    stop = runtime_api.split("def stop_service_apiview", 1)[1].split(
+        "def _force_cancel_runtime_cleanup", 1
+    )[0]
+
+    assert start.index("Service is already running.") < start.index(
+        "deploy_item = get_active_deploy(service_item)"
+    )
+    assert "not force_rebuild" in start
+    assert '"expected_lifecycle_generation": lifecycle_generation' in stop
+    assert "Service stop is already in progress." in stop
+    assert "Service is already stopped." in stop
+
+
+def test_stop_failure_preserves_runtime_truth_and_monitor_supports_replica_sets():
+    from pathlib import Path
+
+    src_root = Path(__file__).resolve().parents[2]
+    stop_service = (
+        src_root / "deployments" / "celery" / "services" / "stop_service.py"
+    ).read_text(encoding="utf-8")
+    scheduler = (
+        src_root / "deployments" / "celery" / "schedules.py"
+    ).read_text(encoding="utf-8")
+    state_machine = (
+        src_root / "deployments" / "common" / "state_machine.py"
+    ).read_text(encoding="utf-8")
+
+    assert "sync_legacy_failure" not in stop_service
+    assert "DjangoDeploymentState" not in stop_service
+    assert "_restore_observed_state_after_failure" in stop_service
+    assert "(SERVICE_STOPPING, SERVICE_RUNNING)" in state_machine
+    desired_state = scheduler.split("def _reconcile_desired_state", 1)[1].split(
+        "def _reconcile_service_runtime", 1
+    )[0]
+    assert "state.replicas_running == state.replicas_desired" in desired_state
+    assert "state.replicas_desired > 0" in desired_state

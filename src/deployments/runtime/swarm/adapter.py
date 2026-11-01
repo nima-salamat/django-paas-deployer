@@ -685,8 +685,24 @@ class SwarmRuntimeAdapter:
         self._ensure_available(self)
         if cancel_check is not None and cancel_check():
             raise RuntimeOperationError("Runtime stop was cancelled.", code="runtime_cancelled", category="cancellation")
-        self.runtime.stop(handle.resource_name or handle.identity.resource_name(), service_id=handle.identity.service_id, operation_key=operation_key)
-        return RuntimeOperationResult(success=True, changed=True, handle=handle, details={"operation_key": operation_key})
+        stop_group = getattr(self.runtime, "stop_service_group", None)
+        if callable(stop_group):
+            # Stop the entire Service-owned process group, not only the web
+            # resource referenced by this RuntimeHandle.
+            stop_group(str(handle.identity.service_id))
+        else:
+            # Compatibility for older runtime doubles/adapters.
+            self.runtime.stop(
+                handle.resource_name or handle.identity.resource_name(),
+                service_id=handle.identity.service_id,
+                operation_key=operation_key,
+            )
+        return RuntimeOperationResult(
+            success=True,
+            changed=True,
+            handle=handle,
+            details={"operation_key": operation_key},
+        )
 
     def remove(self, handle: RuntimeHandle, *, operation_key: str, cancel_check: Callable[[], bool] | None = None) -> RuntimeOperationResult:
         self._ensure_available(self)
@@ -752,7 +768,9 @@ class SwarmRuntimeAdapter:
         else:
             ready = running_ready
 
-        if ready:
+        if state.replicas_desired == 0 and state.replicas_running == 0:
+            status = RuntimeObservedStatus.STOPPED
+        elif ready:
             status = RuntimeObservedStatus.READY
         elif any(task.state.lower() in {"failed", "rejected"} for task in state.tasks):
             status = RuntimeObservedStatus.FAILED
