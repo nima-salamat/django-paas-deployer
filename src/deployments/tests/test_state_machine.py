@@ -21,6 +21,12 @@ class TestServiceTransitions(unittest.TestCase):
     def test_queued_to_failed(self):
         check_service_transition(SERVICE_QUEUED, SERVICE_FAILED)
 
+    def test_queued_to_running_for_restart_completion(self):
+        check_service_transition(SERVICE_QUEUED, SERVICE_RUNNING)
+
+    def test_stopped_to_stopping_for_rebuild_teardown(self):
+        check_service_transition(SERVICE_STOPPED, SERVICE_STOPPING)
+
     def test_queued_to_deploying(self):
         # Should not raise
         check_service_transition(SERVICE_QUEUED, SERVICE_DEPLOYING)
