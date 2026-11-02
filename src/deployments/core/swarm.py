@@ -2267,6 +2267,81 @@ class SwarmRuntime:
         if final_exit_failure is not None:
             raise final_exit_failure
 
+        # Once readiness has expired, a failed task with no active desired
+        # replacement is the concrete cause, even if Swarm's UpdateStatus had
+        # temporarily remained "updating". Do not downgrade that evidence to
+        # a generic readiness timeout.
+        if not final_active_tasks and final_failed_tasks:
+            final_task = max(
+                final_failed_tasks,
+                key=lambda item: str(item.status_timestamp or ""),
+            )
+            final_diagnostics = self._task_container_diagnostics(final_task)
+            final_task_logs = self._task_logs_for_failure(final_task)
+            final_service_logs = self._service_logs_for_failure(name)
+            final_log_evidence = (
+                final_task_logs if str(final_task_logs or "").strip()
+                else final_service_logs
+            )
+            try:
+                from deploy.event_pipeline import sanitize
+                safe_task_error = sanitize(final_task.error or final_task.message or final_task.state)
+                safe_container_error = sanitize(final_diagnostics.get("error") or "")
+                safe_log_evidence = sanitize(final_log_evidence[-12000:])
+            except Exception:
+                safe_task_error = "[task error withheld: sanitization unavailable]"
+                safe_container_error = "[container error withheld: sanitization unavailable]"
+                safe_log_evidence = "[log excerpt withheld: sanitization unavailable]"
+            generic_failure = (
+                f"Swarm task failed after readiness deadline: "
+                f"service={name!r}; task_id={final_task.task_id}; "
+                f"state={final_task.state}; desired_state={final_task.desired_state}; "
+                f"exit_code={final_diagnostics.get('exit_code') or final_task.exit_code!r}; "
+                f"node={final_task.node_name or final_task.node_id or ''}; "
+                f"container_id={final_task.container_id or ''}; "
+                f"oom_killed={final_diagnostics.get('oom_killed')!r}; "
+                f"memory_limit_bytes={final_diagnostics.get('memory_limit_bytes')!r}; "
+                f"task_error={safe_task_error!r}; "
+                f"container_error={safe_container_error!r}; "
+                f"log_evidence_source={'task_container' if str(final_task_logs or '').strip() else 'service_fallback'!r}; "
+                f"task_logs={safe_log_evidence}"
+            )
+            raise DeploymentError(
+                generic_failure,
+                stage="swarm_startup",
+                code="SWARM_TASK_FAILED",
+                user_message=(
+                    "The Swarm task failed and no replacement became ready before "
+                    "the startup deadline. Review the exact task diagnostics."
+                ),
+                technical_message=generic_failure,
+                certainty=FailureCertainty.OBSERVED,
+                details={
+                    "task_id": final_task.task_id,
+                    "state": final_task.state,
+                    "desired_state": final_task.desired_state,
+                    "status_timestamp": final_task.status_timestamp,
+                    "node_id": final_task.node_id,
+                    "node_name": final_task.node_name,
+                    "container_id": final_task.container_id,
+                    "exit_code": final_diagnostics.get("exit_code") or final_task.exit_code,
+                    "task_error": safe_task_error,
+                    "container_error": safe_container_error,
+                    "task_diagnostics": final_diagnostics,
+                    "task_logs": safe_log_evidence,
+                    "log_evidence_source": (
+                        "task_container" if str(final_task_logs or "").strip()
+                        else "service_fallback"
+                    ),
+                    "service_logs": sanitize(final_service_logs[-12000:])
+                    if "sanitize" in locals() else "[log excerpt withheld]",
+                    "replicas_desired": latest.replicas_desired if latest else None,
+                    "replicas_running": latest.replicas_running if latest else None,
+                    "update_state": latest.update_state if latest else None,
+                    "update_message": latest.update_message if latest else None,
+                },
+            )
+
         task_summary = [
             {
                 "task_id": task.task_id,

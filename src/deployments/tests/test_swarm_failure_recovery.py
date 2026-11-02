@@ -288,33 +288,42 @@ class SwarmFailureRecoveryTests(unittest.TestCase):
         self.assertEqual(state.tasks[1].task_id, "task-replacement")
         self.assertEqual(service.tasks.call_count, 10)
 
-    def test_restartable_failed_task_can_remain_in_backoff(self):
+    def test_restartable_failed_task_without_replacement_reports_failure_after_deadline(self):
         image = "demo:r1@sha256:new"
-        service = FakeService(
-            image=image,
-            tasks=[
-                {
-                    "ID": "task-1",
-                    "DesiredState": "shutdown",
-                    "Status": {
-                        "State": "failed",
-                        "Err": "task: non-zero exit (1)",
-                        "Message": "replacement is pending",
-                    },
-                    "Spec": {"ContainerSpec": {"Image": image}},
-                }
-            ],
-        )
+        failed_task = {
+            "ID": "task-137",
+            "DesiredState": "shutdown",
+            "Status": {
+                "State": "failed",
+                "Err": "task: non-zero exit (137)",
+                "Message": "replacement is pending",
+                "Timestamp": "2026-11-02T03:30:39Z",
+                "ContainerStatus": {"ExitCode": 137},
+            },
+            "Spec": {"ContainerSpec": {"Image": image}},
+        }
+        service = FakeService(image=image, tasks=[failed_task])
         service.attrs["Spec"]["TaskTemplate"]["RestartPolicy"] = {
             "Condition": "on-failure"
         }
         runtime = SwarmRuntime(FakeClient(service))
+        clock = {"now": 0.0}
 
-        with self.assertRaises(DeploymentError) as ctx:
-            runtime.wait_ready("demo", timeout=0, expected_image=image)
+        def monotonic():
+            current = clock["now"]
+            clock["now"] += 1.0
+            return current
 
-        self.assertEqual(ctx.exception.code, "SWARM_START_TIMEOUT")
-        self.assertIn("application traceback", ctx.exception.details["service_logs"])
+        with (
+            patch("deployments.core.swarm.time.monotonic", side_effect=monotonic),
+            patch("deployments.core.swarm.time.sleep"),
+        ):
+            with self.assertRaises(DeploymentError) as ctx:
+                runtime.wait_ready("demo", timeout=2, expected_image=image)
+
+        self.assertEqual(ctx.exception.code, "SWARM_TASK_EXIT_137")
+        self.assertEqual(ctx.exception.details["task_id"], "task-137")
+        self.assertEqual(ctx.exception.details["exit_code"], 137)
 
     def test_old_failed_task_does_not_fail_while_desired_replacement_is_pending(self):
         image = "demo:r1@sha256:new"
