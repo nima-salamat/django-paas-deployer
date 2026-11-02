@@ -844,16 +844,7 @@ def _swarm_process_group_health(
 
     ready = not missing_names and not unexpected_names
     terminal_failure = False
-    observations = [
-        {
-            "name": name,
-            "missing": True,
-            "replicas_expected": expected.get(name),
-            "terminal_failure": False,
-            "ready": False,
-        }
-        for name in missing_names
-    ]
+    observations = []
     for name in names_to_inspect:
         try:
             state = runtime.inspect_service(name)
@@ -868,7 +859,14 @@ def _swarm_process_group_health(
 
         if state is None:
             ready = False
-            observations.append({"name": name, "missing": True})
+            observations.append({
+                "name": str(name),
+                "missing": True,
+                "replicas_expected": expected.get(str(name)),
+                "terminal_failure": False,
+                "ready": False,
+                "unexpected_process": str(name) in unexpected_names,
+            })
             continue
 
         desired = int(getattr(state, "replicas_desired", 0) or 0)
