@@ -1423,10 +1423,10 @@ class SwarmRuntime:
             "task_id": task.task_id,
             "container_id": task.container_id,
             "health_status": task.health_status,
-            "exit_code": task.exit_code,
+            "exit_code": getattr(task, "exit_code", None),
             "oom_killed": None,
-            "memory_limit_bytes": task.memory_limit_bytes,
-            "nano_cpus": task.nano_cpus,
+            "memory_limit_bytes": getattr(task, "memory_limit_bytes", None),
+            "nano_cpus": getattr(task, "nano_cpus", None),
         }
         if not task.container_id:
             return result
@@ -1579,11 +1579,11 @@ class SwarmRuntime:
         ).lower()
 
         def _safe_diagnostic(value: Any, *, limit: int = 600) -> str:
-            text = str(value or "").replace("\\n", " ").replace("\\r", " ")
+            text = str(value or "").replace("\n", " ").replace("\r", " ")
             text = re.sub(
-                r"(?i)\\b(password|passwd|secret|token|api[_-]?key|authorization)\\b"
-                r"(\\s*[:=]\\s*|\\s+)[^\\s,;]+",
-                r"\\1=[REDACTED]",
+                r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization)\b"
+                r"(\s*[:=]\s*|\s+)[^\s,;]+",
+                r"\1=[REDACTED]",
                 text,
             )
             return text[:limit]
@@ -1591,9 +1591,9 @@ class SwarmRuntime:
         def _safe_log_excerpt(value: Any, *, limit: int = 12000) -> str:
             text = str(value or "")
             text = re.sub(
-                r"(?i)\\b(password|passwd|secret|token|api[_-]?key|authorization)\\b"
-                r"(\\s*[:=]\\s*|\\s+)[^\\s,;]+",
-                r"\\1=[REDACTED]",
+                r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization)\b"
+                r"(\s*[:=]\s*|\s+)[^\s,;]+",
+                r"\1=[REDACTED]",
                 text,
             )
             return text[-limit:]
@@ -2114,7 +2114,7 @@ class SwarmRuntime:
                     exit_code = task.exit_code
                 if exit_code is None:
                     match = re.search(
-                        r"non-zero exit\\s*\\((\\d+)\\)",
+                        r"non-zero exit\s*\((\d+)\)",
                         str(task.error or task.message or ""),
                         flags=re.IGNORECASE,
                     )
