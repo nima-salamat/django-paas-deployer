@@ -1773,7 +1773,6 @@ class SwarmRuntime:
         """Wait until a Swarm service is running and, when configured, healthy."""
         deadline = time.monotonic() + float(timeout)
         latest = None
-        restartable_failure_seen_at: float | None = None
         rollback_states = {
             "rollback_started",
             "rollback_paused",
@@ -1941,23 +1940,28 @@ class SwarmRuntime:
                     for task in terminal
                 )
             )
-            restartable_backoff = False
-            if active or running:
-                restartable_failure_seen_at = None
-            elif restartable_failure:
-                if restartable_failure_seen_at is None:
-                    restartable_failure_seen_at = time.monotonic()
-                restartable_backoff = time.monotonic() - restartable_failure_seen_at < 8.0
-                if restartable_backoff:
-                    time.sleep(1)
-                    continue
+            # With an automatic restart policy, a failed task is not a
+            # terminal service failure while Swarm still desires replicas.
+            # Replacement scheduling can take longer than a fixed grace
+            # window (for example while a node is under resource pressure).
+            # Keep observing until a replacement becomes active or the
+            # overall readiness deadline expires; only then report failure.
+            restartable_replacement_pending = (
+                restartable_failure
+                and not active
+                and not running
+                and desired > 0
+                and not update_in_progress
+            )
+            if restartable_replacement_pending:
+                time.sleep(1)
+                continue
             terminal_without_replacement = (
                 terminal
                 and not active
                 and not running
                 and desired > 0
                 and not update_in_progress
-                and not restartable_backoff
             )
             service_scaled_to_zero = (
                 desired <= 0

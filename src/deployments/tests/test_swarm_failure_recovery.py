@@ -202,6 +202,61 @@ class SwarmFailureRecoveryTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "SWARM_SERVICE_SCALED_TO_ZERO")
         self.assertEqual(ctx.exception.details["replicas_desired"], 0)
 
+    def test_restartable_failed_task_waits_for_replacement_beyond_eight_seconds(self):
+        image = "demo:r1@sha256:new"
+        failed_task = {
+            "ID": "task-failed",
+            "DesiredState": "shutdown",
+            "Status": {
+                "State": "failed",
+                "Err": "task: non-zero exit (137)",
+                "Message": "replacement is pending",
+                "Timestamp": "2026-11-02T03:30:39Z",
+                "ContainerStatus": {"ExitCode": 137},
+            },
+            "Spec": {"ContainerSpec": {"Image": image}},
+        }
+        replacement_task = {
+            "ID": "task-replacement",
+            "DesiredState": "running",
+            "Status": {
+                "State": "running",
+                "Message": "replacement started",
+                "Timestamp": "2026-11-02T03:30:51Z",
+                "ContainerStatus": {"ExitCode": 0},
+            },
+            "Spec": {"ContainerSpec": {"Image": image}},
+        }
+        service = FakeService(image=image, tasks=[failed_task])
+        service.attrs["Spec"]["TaskTemplate"]["RestartPolicy"] = {
+            "Condition": "on-failure"
+        }
+        service.tasks = MagicMock(
+            side_effect=[[failed_task] for _ in range(9)] + [[replacement_task]]
+        )
+        runtime = SwarmRuntime(FakeClient(service))
+
+        clock = {"now": 0.0}
+
+        def monotonic():
+            current = clock["now"]
+            clock["now"] += 1.0
+            return current
+
+        with (
+            patch("deployments.core.swarm.time.monotonic", side_effect=monotonic),
+            patch("deployments.core.swarm.time.sleep"),
+        ):
+            state = runtime.wait_ready(
+                "demo",
+                timeout=20,
+                expected_image=image,
+            )
+
+        self.assertEqual(state.replicas_running, 1)
+        self.assertEqual(state.tasks[0].task_id, "task-replacement")
+        self.assertEqual(service.tasks.call_count, 10)
+
     def test_restartable_failed_task_can_remain_in_backoff(self):
         image = "demo:r1@sha256:new"
         service = FakeService(

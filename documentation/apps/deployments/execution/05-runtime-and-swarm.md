@@ -351,6 +351,13 @@ OOM kill only when Docker's container inspection explicitly reports
 includes the exact task's container inspection and task-scoped logs; service
 logs are only a fallback because they may contain output from older tasks.
 
+When the service has an automatic `on-failure`/ `any` restart policy and
+still desires replicas, readiness continues observing Swarm replacement
+scheduling until the overall readiness deadline. A fixed short grace period
+must not mark the deployment failed before a slower replacement becomes
+ready. If no replacement becomes ready before the deadline, the failed task's
+exit/inspection diagnostics are reported.
+
 
 This is backend readiness, not necessarily application HTTP readiness.
 
