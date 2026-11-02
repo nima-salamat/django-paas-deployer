@@ -213,6 +213,7 @@ def stop(self, service_id, expected_lifecycle_generation=None) -> None:
             )
             raise self.retry(exc=exc)
         logger.exception("Stop exhausted retries for service_id: %s", service_id)
+        raise
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=10, name="deployments.celery.tasks.restart_service")
