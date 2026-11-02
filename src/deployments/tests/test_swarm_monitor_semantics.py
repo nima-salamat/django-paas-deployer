@@ -287,6 +287,38 @@ class SwarmMonitorSemanticsTests(unittest.TestCase):
         self.assertTrue(missing["missing"])
         self.assertEqual(missing["replicas_expected"], 2)
 
+    def test_process_graph_read_failure_does_not_claim_convergence(self):
+        revision = SimpleNamespace(pk="revision-1")
+        service = SimpleNamespace(
+            pk="service-1",
+            active_revision=revision,
+            plan=SimpleNamespace(platform="django"),
+            get_docker_service_name=lambda: "app-service",
+        )
+
+        class Runtime:
+            def service_names_for_service(self, service_id):
+                return ["app-service"]
+
+            def inspect_service(self, name):
+                return SimpleNamespace(
+                    tasks=(SimpleNamespace(state="running", health_status=None),),
+                    replicas_desired=1,
+                    replicas_running=1,
+                    healthcheck_configured=False,
+                    update_state=None,
+                )
+
+        with patch(
+            "deployments.core.runtime_graph.ServiceRuntimeGraph.from_revision",
+            side_effect=RuntimeError("revision graph unavailable"),
+        ):
+            ready, failed, observations = _swarm_process_group_health(Runtime(), service)
+
+        self.assertFalse(ready)
+        self.assertFalse(failed)
+        self.assertTrue(observations[0]["configuration_unknown"])
+
     def test_failure_details_include_task_reason_and_runtime_logs(self):
         runtime = SimpleNamespace(
             service_logs=lambda name, tail=100: b"app exited unexpectedly\\n"
