@@ -462,7 +462,7 @@ def restart_service(self, service_id, expected_lifecycle_generation=None) -> Non
             logger.exception("Failed to persist final restart failure for service=%s.", service_id)
         raise
 
-@shared_task(bind=True, max_retries=0, name="deployments.celery.tasks.rollback_deployment")
+@shared_task(bind=True, max_retries=3, default_retry_delay=15, name="deployments.celery.tasks.rollback_deployment")
 def rollback_deployment(
     self,
     deployment_id: str | int,
@@ -473,22 +473,67 @@ def rollback_deployment(
     """Restore a previously promoted immutable Release through RuntimeContract."""
     from deployments.celery.services.rollback_service import ReleaseRollbackService
 
+    task_id = str(self.request.id or "")
     try:
         ReleaseRollbackService().execute(
             deployment_id,
-            task_id=str(self.request.id),
+            task_id=task_id,
             expected_lifecycle_generation=int(expected_lifecycle_generation),
             expected_previous_deploy_id=str(expected_previous_deploy_id),
+            allow_owned_retry=bool(self.request.retries),
         )
     except InvalidServiceStateError:
         logger.info(
-            "Skipping stale or non-claimable rollback attempt=%s.",
+            "Rollback attempt=%s lost its lifecycle precondition or owner; terminalizing only its own row.",
             deployment_id,
         )
+        try:
+            with transaction.atomic():
+                locked = Deploy.objects.select_for_update().filter(pk=deployment_id).first()
+                if (
+                    locked is not None
+                    and str(locked.execution_task_id or "") == task_id
+                    and locked.status in (
+                        DeploymentStatusChoices.PENDING,
+                        DeploymentStatusChoices.RUNNING,
+                    )
+                ):
+                    StateManager.transition_deploy_terminal_if_owned(
+                        locked.pk,
+                        DeploymentStatusChoices.CANCELLED,
+                        task_id=task_id,
+                        update_fields={
+                            "stage": "cancelled",
+                            "status_message": "Rollback was superseded by another lifecycle operation.",
+                            "rollback_status": "failed",
+                        },
+                    )
+        except Exception:
+            logger.exception("Could not terminalize stale rollback attempt=%s.", deployment_id)
         return
     except Exception as exc:
-        logger.exception("Rollback attempt=%s failed before completion.", deployment_id)
-        task_id = str(self.request.id or "")
+        retry_owner = Deploy.objects.filter(
+            pk=deployment_id,
+            execution_task_id=task_id,
+            service__task_id=task_id,
+            status=DeploymentStatusChoices.RUNNING,
+            cancel_requested=False,
+        ).exists()
+        if (
+            bool(getattr(exc, "recoverable", False))
+            and retry_owner
+            and self.request.retries < self.max_retries
+        ):
+            logger.warning(
+                "Recoverable rollback failure attempt=%s retry=%s/%s: %s",
+                deployment_id,
+                self.request.retries + 1,
+                self.max_retries + 1,
+                exc,
+            )
+            raise self.retry(exc=exc)
+
+        logger.exception("Rollback attempt=%s failed.", deployment_id)
         try:
             with transaction.atomic():
                 locked = (
@@ -511,26 +556,30 @@ def rollback_deployment(
                         update_fields={
                             "stage": "rollback_failed",
                             "status_message": "Release rollback failed before it could be completed.",
-                            "error_message": str(exc)[:1000],
+                            "error_message": str(getattr(exc, "user_message", None) or "Rollback failed.")[:1000],
                             "rollback_status": "failed",
                             "reconciliation_required": True,
                         },
                     )
-                    Service.objects.select_for_update().filter(
-                        pk=locked.service_id,
-                        task_id=task_id,
-                        status__in=(
+                    previous_deploy_id = locked.previous_deploy_id
+                    service = Service.objects.select_for_update().filter(
+                        pk=locked.service_id
+                    ).first()
+                    if (
+                        service is not None
+                        and str(service.task_id or "") == task_id
+                        and service.status in (
                             SERVICE_STATUS_CHOICES.QUEUED,
                             SERVICE_STATUS_CHOICES.DEPLOYING,
-                        ),
-                    ).update(
-                        status=SERVICE_STATUS_CHOICES.FAILED,
-                        task_id=None,
-                        deploy_started=None,
-                        updated_at=timezone.now(),
-                    )
-                    if locked.previous_deploy_id:
-                        Deploy.objects.filter(pk=locked.previous_deploy_id).update(
+                        )
+                    ):
+                        StateManager.transition_service(
+                            service.pk,
+                            SERVICE_STATUS_CHOICES.FAILED,
+                            update_fields={"task_id": None, "deploy_started": None},
+                        )
+                    if previous_deploy_id:
+                        Deploy.objects.filter(pk=previous_deploy_id).update(
                             rollback_status="failed",
                             updated_at=timezone.now(),
                         )
