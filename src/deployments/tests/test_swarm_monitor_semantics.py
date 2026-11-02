@@ -1,7 +1,11 @@
 import unittest
 from types import SimpleNamespace
 
-from deployments.celery.schedules import _swarm_failure_details, _swarm_has_terminal_runtime_failure
+from deployments.celery.schedules import (
+    _swarm_failure_details,
+    _swarm_has_terminal_runtime_failure,
+    _swarm_process_group_health,
+)
 
 
 class SwarmMonitorSemanticsTests(unittest.TestCase):
@@ -69,6 +73,101 @@ class SwarmMonitorSemanticsTests(unittest.TestCase):
                     update_state=update_state,
                 )
                 self.assertFalse(_swarm_has_terminal_runtime_failure(state))
+
+    def test_process_group_requires_all_desired_replicas_for_every_process(self):
+        class Runtime:
+            states = {
+                "app-web": self._state(
+                    tasks=[self._task(state="running"), self._task(state="running")],
+                    replicas_desired=2,
+                    replicas_running=2,
+                ),
+                "app-worker": self._state(
+                    tasks=[self._task(state="running"), self._task(state="starting")],
+                    replicas_desired=2,
+                    replicas_running=1,
+                ),
+            }
+
+            def service_names_for_service(self, service_id):
+                return ["app-web", "app-worker"]
+
+            def inspect_service(self, name):
+                return self.states[name]
+
+        service = SimpleNamespace(
+            pk="service-1",
+            get_docker_service_name=lambda: "app-web",
+        )
+        ready, failed, observations = _swarm_process_group_health(Runtime(), service)
+
+        self.assertFalse(ready)
+        self.assertFalse(failed)
+        self.assertEqual(observations[0]["replicas_desired"], 2)
+        self.assertEqual(observations[0]["replicas_running"], 2)
+        self.assertEqual(observations[1]["replicas_running"], 1)
+
+    def test_process_group_is_ready_when_all_replicas_are_running(self):
+        class Runtime:
+            def service_names_for_service(self, service_id):
+                return ["app-web", "app-worker"]
+
+            def inspect_service(self, name):
+                desired = 3 if name == "app-web" else 2
+                return self_state(
+                    tasks=[task(state="running") for _ in range(desired)],
+                    replicas_desired=desired,
+                    replicas_running=desired,
+                )
+
+        def task(*, state):
+            return SimpleNamespace(desired_state="running", state=state)
+
+        def self_state(*, tasks, replicas_desired, replicas_running):
+            return SimpleNamespace(
+                tasks=tuple(tasks),
+                replicas_desired=replicas_desired,
+                replicas_running=replicas_running,
+                healthcheck_configured=False,
+                update_state=None,
+            )
+
+        service = SimpleNamespace(
+            pk="service-1",
+            get_docker_service_name=lambda: "app-web",
+        )
+        ready, failed, observations = _swarm_process_group_health(Runtime(), service)
+
+        self.assertTrue(ready)
+        self.assertFalse(failed)
+        self.assertEqual(len(observations), 2)
+
+    def test_process_group_healthcheck_requires_healthy_replicas(self):
+        class Runtime:
+            def service_names_for_service(self, service_id):
+                return ["app-worker"]
+
+            def inspect_service(self, name):
+                return SimpleNamespace(
+                    tasks=(
+                        SimpleNamespace(desired_state="running", state="running", health_status="healthy"),
+                        SimpleNamespace(desired_state="running", state="running", health_status="starting"),
+                    ),
+                    replicas_desired=2,
+                    replicas_running=2,
+                    healthcheck_configured=True,
+                    update_state=None,
+                )
+
+        service = SimpleNamespace(
+            pk="service-1",
+            get_docker_service_name=lambda: "app-web",
+        )
+        ready, failed, observations = _swarm_process_group_health(Runtime(), service)
+
+        self.assertFalse(ready)
+        self.assertFalse(failed)
+        self.assertEqual(observations[0]["healthy_replicas"], 1)
 
     def test_failure_details_include_task_reason_and_runtime_logs(self):
         runtime = SimpleNamespace(
