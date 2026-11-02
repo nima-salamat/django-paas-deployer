@@ -203,6 +203,10 @@ class ReleaseRollbackService:
             store = DjangoDeploymentLifecycleStore(
                 int(deploy.pk),
                 task_id=str(task_id),
+                expected_active_revision_id=str(
+                    getattr(service, "active_revision_id", None) or ""
+                ),
+                allow_active_revision_replacement=True,
             )
 
             def publish(event) -> None:
@@ -241,48 +245,8 @@ class ReleaseRollbackService:
                 ),
                 publish=publish,
             )
-            def activate_target_revision(_context, _plan, _readiness) -> None:
-                from services.revisioning import activate_revision_locked
-
-                with transaction.atomic():
-                    locked_service = Service.objects.select_for_update().get(pk=service.pk)
-                    locked_attempt = Deploy.objects.select_for_update().get(pk=deploy.pk)
-                    if locked_attempt.cancel_requested:
-                        from deployments.common.exceptions import DeploymentCancelled
-                        raise DeploymentCancelled(
-                            "Rollback was cancelled before release activation.",
-                            stage="cancelled",
-                            user_message="Rollback was cancelled before activation.",
-                        )
-                    actual_generation = int(
-                        getattr(locked_service, "lifecycle_generation", 0) or 0
-                    )
-                    if actual_generation != int(expected_lifecycle_generation):
-                        raise InvalidServiceStateError(
-                            "Service lifecycle changed before rollback activation.",
-                            details={
-                                "expected_lifecycle_generation": int(expected_lifecycle_generation),
-                                "actual_lifecycle_generation": actual_generation,
-                            },
-                        )
-                    if str(locked_service.active_revision_id or "") != str(target_release.revision_id):
-                        active_before = get_authoritative_deploy(locked_service)
-                        if str(getattr(active_before, "pk", "") or "") != str(expected_previous_deploy_id):
-                            raise InvalidServiceStateError(
-                                "The active release changed before rollback activation.",
-                                details={
-                                    "expected_previous_deploy_id": str(expected_previous_deploy_id),
-                                    "actual_previous_deploy_id": str(getattr(active_before, "pk", "") or ""),
-                                },
-                            )
-                        activate_revision_locked(locked_service, target_release.revision_id)
-                    Service.objects.filter(pk=locked_service.pk).update(
-                        desired_state="running",
-                    )
-
             strategy = CallbackDeploymentStrategy(
                 build_plan=lambda _context: target_plan,
-                activate_plan=activate_target_revision,
             )
             result = DeploymentLifecycleExecutor(store).execute(
                 context,
@@ -353,7 +317,6 @@ class ReleaseRollbackService:
                         "task_id": None,
                         "deploy_started": None,
                     },
-                    allow_runtime_reconciliation=restored,
                 )
 
             error = result.error or DeploymentError(
