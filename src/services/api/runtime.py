@@ -876,7 +876,11 @@ def force_cancel_deploy_apiview(request):
     try:
         if swarm_enabled():
             runtime_state = SwarmRuntime().inspect_service(service_item.get_docker_service_name())
-            running = bool(runtime_state and runtime_state.replicas_running == 1)
+            running = bool(
+                runtime_state
+                and runtime_state.replicas_desired > 0
+                and runtime_state.replicas_running == runtime_state.replicas_desired
+            )
         else:
             running = Container.container_is_running(service_item.get_docker_service_name())
     except Exception:
