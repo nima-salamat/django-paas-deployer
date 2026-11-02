@@ -1026,16 +1026,39 @@ def restart_service_apiview(request):
                     status=status.HTTP_409_CONFLICT,
                 )
 
+            from services.lifecycle import bump_lifecycle
+            from deployments.core.state.manager import StateManager
+
             task_id = make_uuid4()
-            service_item.status = SERVICE_STATUS_CHOICES.QUEUED
-            service_item.desired_state = "running"
-            service_item.task_id = task_id
-            service_item.deploy_started = timezone.now()
-            service_item.save(update_fields=["status", "desired_state", "task_id", "deploy_started", "updated_at"])
+            generation = bump_lifecycle(
+                service_item.pk,
+                desired_state="running",
+            )
+            StateManager.transition_service(
+                service_item.pk,
+                SERVICE_STATUS_CHOICES.QUEUED,
+                update_fields={
+                    "desired_state": "running",
+                    "lifecycle_generation": generation,
+                    "task_id": str(task_id),
+                    "deploy_started": timezone.now(),
+                },
+            )
 
             from deployments.celery.tasks import restart_service as restart_task
             transaction.on_commit(
-                lambda: restart_task.apply_async(args=[str(service_id)], task_id=task_id)
+                lambda: restart_task.apply_async(
+                    args=[str(service_id)],
+                    kwargs={"expected_lifecycle_generation": generation},
+                    task_id=task_id,
+                    retry=True,
+                    retry_policy={
+                        "max_retries": 5,
+                        "interval_start": 0,
+                        "interval_step": 0.5,
+                        "interval_max": 3,
+                    },
+                )
             )
 
             if share is not None:
