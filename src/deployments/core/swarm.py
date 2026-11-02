@@ -2038,15 +2038,6 @@ class SwarmRuntime:
                         exit_code = int(match.group(1))
                 task_logs = self._task_logs_for_failure(task)
                 evidence_logs = task_logs if str(task_logs or "").strip() else service_logs
-                combined_error = " ".join(
-                    value for value in (
-                        str(task.error or ""),
-                        str(task.message or ""),
-                        str(task_diagnostics.get("error") or ""),
-                        str(evidence_logs[-4000:] or ""),
-                    )
-                    if value
-                ).lower()
                 startup_failure = self._startup_process_failure(
                     service_name=name,
                     task_id=task.task_id,
@@ -2119,7 +2110,6 @@ class SwarmRuntime:
                         "service_image": latest.service_image,
                         "update_state": latest.update_state,
                         "update_message": latest.update_message,
-                        "exit_code": exit_code,
                         "task_diagnostics": task_diagnostics,
                         "task_logs": task_logs[-12000:],
                         "log_evidence_source": log_source,
