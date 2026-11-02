@@ -742,6 +742,12 @@ class DeployViewSet(ModelViewSet):
                     operation_started_at=now,
                     operation_resource_id=str(target_release.pk),
                     operation_previous_resource_id=str(current_release.pk),
+                    recovery_metadata={
+                        "expected_lifecycle_generation": int(generation),
+                        "expected_previous_deploy_id": str(active_deploy.pk),
+                        "expected_active_revision_id": str(service.active_revision_id or ""),
+                        "target_release_id": str(target_release.pk),
+                    },
                 )
 
                 StateManager.transition_service(
