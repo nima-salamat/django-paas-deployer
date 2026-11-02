@@ -79,7 +79,7 @@ def test_exit_137_is_classified_as_oom_only_when_docker_confirms_it():
 
     assert failure is not None
     assert failure.code == "SWARM_TASK_OOM_KILLED"
-    assert failure.details["failure_reason"] == "sigkill_oom_confirmed"
+    assert failure.details["failure_reason"] == "exit_137_oom_confirmed"
     assert failure.details["oom_status"] == "confirmed"
     assert failure.details["log_evidence_source"] == "task_container"
     assert "wp-cron.php" not in failure.technical_message
