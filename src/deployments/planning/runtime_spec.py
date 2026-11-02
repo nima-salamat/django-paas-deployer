@@ -28,6 +28,7 @@ def _is_sensitive_key(key: str) -> bool:
     return any(token in lowered for token in (
         "password", "secret", "token", "private_key",
         "api_key", "apikey", "authorization", "credential",
+        "dsn", "database_url", "connection_string",
     ))
 
 
