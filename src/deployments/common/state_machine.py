@@ -93,6 +93,7 @@ DEPLOY_STATES: tuple[str, ...] = (
 SERVICE_TRANSITIONS: FrozenSet[tuple[str | None, str]] = frozenset({
     # Normal lifecycle
     (None, SERVICE_QUEUED),                # brand new service
+    (SERVICE_QUEUED, SERVICE_RUNNING),    # restart completed without a new build
     (SERVICE_QUEUED, SERVICE_DEPLOYING),   # deploy task picks it up
     (SERVICE_DEPLOYING, SERVICE_RUNNING),  # deploy succeeded
     (SERVICE_DEPLOYING, SERVICE_FAILED),   # deploy failed
@@ -107,6 +108,7 @@ SERVICE_TRANSITIONS: FrozenSet[tuple[str | None, str]] = frozenset({
     (SERVICE_STOPPING, SERVICE_RUNNING),   # runtime is still live after a failed stop
 
     # Recovery
+    (SERVICE_STOPPED, SERVICE_STOPPING),  # rebuild teardown intent
     (SERVICE_STOPPED, SERVICE_QUEUED),     # redeploy
     (SERVICE_FAILED, SERVICE_QUEUED),      # retry after fixing
     (SERVICE_QUEUED, SERVICE_STOPPED),     # queued operation cancelled before worker start
