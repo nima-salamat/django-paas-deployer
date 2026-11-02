@@ -35,6 +35,7 @@ class ReleaseRollbackService:
         task_id: str,
         expected_lifecycle_generation: int,
         expected_previous_deploy_id: str,
+        allow_owned_retry: bool = False,
     ) -> None:
         deploy_row = (
             Deploy.objects.select_related("service")
@@ -50,6 +51,7 @@ class ReleaseRollbackService:
             claimed = StateManager.lock_and_get_deployment(
                 int(deploy_row.pk),
                 task_id=str(task_id),
+                allow_owned_retry=allow_owned_retry,
             )
             if claimed is None:
                 logger.info("Rollback attempt %s was not claimable.", deploy_row.pk)
@@ -256,6 +258,15 @@ class ReleaseRollbackService:
                     (target_release.health_policy or {}).get("timeout") or 180
                 ),
             )
+
+            if (
+                result.retryable
+                and result.error is not None
+                and bool(getattr(result.error, "recoverable", False))
+            ):
+                # Leave rollback_status pending and retain the same Deploy +
+                # Service owner token. Celery will retry this immutable target.
+                raise result.error
 
             now = timezone.now()
             if result.success:
