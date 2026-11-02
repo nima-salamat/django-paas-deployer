@@ -1160,18 +1160,6 @@ class StateManager:
                 or str(deploy.error_message or "").strip()
                 or "Deployment cancelled by the user."
             )[:500]
-            updates = {
-                "status": sm.DEPLOY_CANCELLED,
-                "stage": "cancelled",
-                "progress": 100,
-                "completed_at": now,
-                "worker_heartbeat_at": now,
-                "execution_task_id": "",
-                "status_message": cancellation_message,
-                "error_message": "",
-                "updated_at": now,
-            }
-            Deploy.objects.filter(pk=deploy_id).update(**updates)
             payload = {
                 "event_id": str(uuid.uuid4()),
                 "trace_id": str(deploy_id),
@@ -1186,20 +1174,21 @@ class StateManager:
                 "progress": 100,
                 "details": {"cancellation_won_retry_race": True},
             }
-            DeploymentEventOutbox.objects.create(
-                deployment_id=deploy_id,
-                service_id=str(deploy.service_id),
-                event_id=payload["event_id"],
-                event_type=payload["event_type"],
-                stage="cancelled",
-                level="warning",
-                occurred_at=now,
-                payload=payload,
+            # Reuse the same owned terminal transition as ordinary cancellation
+            # so Service.status/desired_state are projected atomically as well.
+            return cls.transition_deploy_if_owned(
+                deploy_id,
+                sm.DEPLOY_CANCELLED,
+                task_id=owner,
+                update_fields={
+                    "stage": "cancelled",
+                    "progress": 100,
+                    "status_message": cancellation_message,
+                    "error_message": "",
+                },
+                terminal=True,
+                event_payload=payload,
             )
-            # The cancellation use case owns Service.desired_state and
-            # runtime restoration. Do not force STOPPED here: a replacement
-            # deployment may have a healthy previous release to preserve.
-            return False
 
     @classmethod
     def transition_deploy_terminal_if_owned(
