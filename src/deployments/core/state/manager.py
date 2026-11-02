@@ -241,6 +241,8 @@ class StateManager:
         expected_lifecycle_generation: int | None = None,
         expected_previous_deploy_id: str | None = None,
         enforce_previous_deploy: bool = False,
+        expected_active_revision_id: str | None = None,
+        allow_active_revision_replacement: bool = False,
         update_fields: Optional[dict] = None,
         event_payload: Optional[dict] = None,
     ) -> bool:
@@ -318,7 +320,19 @@ class StateManager:
                     )
                     return False
 
-            if service.active_revision_id is not None and not already_active:
+            if allow_active_revision_replacement:
+                expected_active_revision = str(expected_active_revision_id or "")
+                actual_active_revision = str(service.active_revision_id or "")
+                if not already_active and actual_active_revision != expected_active_revision:
+                    logger.info(
+                        "Refusing revision replacement after active revision changed: "
+                        "deploy=%s expected_active_revision=%s actual_active_revision=%s",
+                        deploy_id,
+                        expected_active_revision,
+                        actual_active_revision,
+                    )
+                    return False
+            elif service.active_revision_id is not None and not already_active:
                 return False
 
             activate_revision_locked(service, revision_id)
