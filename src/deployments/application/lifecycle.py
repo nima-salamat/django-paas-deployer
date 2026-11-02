@@ -362,13 +362,22 @@ class DeploymentLifecycleExecutor:
             )
             if not transitioned:
                 return self._stale_result(context, error=error, runtime_result=applied)
-            context.emit(
-                "deployment_failed",
-                error.user_message,
-                level="error",
-                progress=100,
-                details={"error_code": error.code, "recoverable": error.recoverable},
-            )
+            if error.recoverable and self.store.status == sm.DEPLOY_RUNNING:
+                context.emit(
+                    "retry_waiting",
+                    "A temporary runtime failure occurred; the deployment attempt remains owned and will be retried.",
+                    level="warning",
+                    progress=85,
+                    details={"error_code": error.code, "recoverable": True},
+                )
+            else:
+                context.emit(
+                    "deployment_failed",
+                    error.user_message,
+                    level="error",
+                    progress=100,
+                    details={"error_code": error.code, "recoverable": error.recoverable},
+                )
             return DeploymentLifecycleResult(
                 status=self.store.status,
                 success=False,
