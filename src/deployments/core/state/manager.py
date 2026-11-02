@@ -977,6 +977,7 @@ class StateManager:
         message: str,
         error_message: str = "",
         stage: str = "retry_pending",
+        update_fields: Optional[dict] = None,
         event_payload: Optional[dict] = None,
     ) -> bool:
         """Keep a recoverable attempt RUNNING while preserving its execution owner.
@@ -1021,7 +1022,23 @@ class StateManager:
                     return False
                 safe_stage = str(stage or "retry_pending")[:64]
                 safe_message = str(message or "A temporary deployment failure occurred; retry is pending.")[:500]
+                allowed_metadata = {
+                    "reconciliation_required",
+                    "cleanup_status",
+                    "cleanup_failures",
+                    "health_status",
+                    "container_status",
+                    "image_status",
+                    "volume_status",
+                    "network_status",
+                }
+                metadata = {
+                    key: value
+                    for key, value in dict(update_fields or {}).items()
+                    if key in allowed_metadata
+                }
                 updates = {
+                    **metadata,
                     "status": target,
                     "stage": safe_stage,
                     "status_message": safe_message,
