@@ -743,7 +743,77 @@ def _recover_stale_running_deploys(policies) -> None:
 
 
 
-def _swarm_process_group_health(runtime, service: Service) -> tuple[bool, bool, list[dict]]:
+def _expected_swarm_process_replicas(
+    service: Service,
+    deploy: Deploy | None = None,
+) -> dict[str, int]:
+    """Resolve the process names and replica counts required by the immutable revision.
+
+    Swarm's current desired replica count is not the application's desired
+    configuration. Comparing running==Swarm desired alone can hide an
+    accidental scale-down (for example, a revision requires 3 web replicas
+    but the Swarm service was manually reduced to 1/1).
+    """
+    revision = (
+        getattr(deploy, "revision", None)
+        if deploy is not None
+        else None
+    ) or getattr(service, "active_revision", None)
+    if revision is None:
+        return {}
+
+    try:
+        graph = __import__(
+            "deployments.core.runtime_graph",
+            fromlist=["ServiceRuntimeGraph"],
+        ).ServiceRuntimeGraph.from_revision(revision)
+        base_name = str(service.get_docker_service_name())
+        platform = str(
+            getattr(getattr(service, "plan", None), "platform", "") or ""
+        ).strip().lower()
+        try:
+            from deployments.core.db_deployer import DB_PLATFORMS
+            is_database_service = platform in DB_PLATFORMS
+        except Exception:
+            is_database_service = False
+
+        expected: dict[str, int] = {}
+        for process in (getattr(graph, "processes", ()) or ()):
+            if not bool(getattr(process, "enabled", True)):
+                continue
+            process_name = str(getattr(process, "name", "") or "web").strip().lower()
+            process_type = str(getattr(process, "process_type", "") or "").strip().lower()
+            is_database_process = (
+                is_database_service
+                or process_type == "database"
+            )
+            runtime_name = (
+                base_name
+                if process_name == "web" or is_database_process
+                else f"{base_name}-{process_name}"
+            )
+            replicas = int(getattr(process, "replicas", 1) or 1)
+            if replicas < 1:
+                raise ValueError(
+                    f"Enabled process {process_name!r} has invalid replica count {replicas}."
+                )
+            expected[runtime_name] = replicas
+        return expected
+    except Exception:
+        logger.warning(
+            "Could not derive the expected Swarm process graph for service=%s; "
+            "falling back to observed process names without claiming configuration convergence.",
+            service.pk,
+            exc_info=True,
+        )
+        return {}
+
+
+def _swarm_process_group_health(
+    runtime,
+    service: Service,
+    deploy: Deploy | None = None,
+) -> tuple[bool, bool, list[dict]]:
     """Observe every managed process service and all of its desired replicas.
 
     The service-level runtime is a process graph, not necessarily a single
@@ -761,13 +831,30 @@ def _swarm_process_group_health(runtime, service: Service) -> tuple[bool, bool, 
         )
         return False, False, []
 
-    if not names:
-        names = [service.get_docker_service_name()]
+    expected = _expected_swarm_process_replicas(service, deploy)
+    if expected:
+        missing_names = sorted(set(expected) - set(names))
+        unexpected_names = sorted(set(names) - set(expected))
+    else:
+        missing_names = []
+        unexpected_names = []
+    names_to_inspect = sorted(set(names) | set(expected))
+    if not names_to_inspect:
+        names_to_inspect = [service.get_docker_service_name()]
 
-    ready = True
+    ready = not missing_names and not unexpected_names
     terminal_failure = False
-    observations = []
-    for name in names:
+    observations = [
+        {
+            "name": name,
+            "missing": True,
+            "replicas_expected": expected.get(name),
+            "terminal_failure": False,
+            "ready": False,
+        }
+        for name in missing_names
+    ]
+    for name in names_to_inspect:
         try:
             state = runtime.inspect_service(name)
         except Exception:
@@ -786,6 +873,7 @@ def _swarm_process_group_health(runtime, service: Service) -> tuple[bool, bool, 
 
         desired = int(getattr(state, "replicas_desired", 0) or 0)
         running = int(getattr(state, "replicas_running", 0) or 0)
+        expected_replicas = expected.get(str(name))
         healthcheck_configured = bool(getattr(state, "healthcheck_configured", False))
         healthy = sum(
             1
@@ -795,7 +883,9 @@ def _swarm_process_group_health(runtime, service: Service) -> tuple[bool, bool, 
         process_ready = (
             desired > 0
             and running == desired
+            and (expected_replicas is None or desired == expected_replicas)
             and (not healthcheck_configured or healthy >= desired)
+            and str(name) not in unexpected_names
         )
         ready = ready and process_ready
         failed = _swarm_has_terminal_runtime_failure(state)
@@ -803,7 +893,9 @@ def _swarm_process_group_health(runtime, service: Service) -> tuple[bool, bool, 
         observations.append({
             "name": str(name),
             "replicas_desired": desired,
+            "replicas_expected": expected_replicas,
             "replicas_running": running,
+            "unexpected_process": str(name) in unexpected_names,
             "healthcheck_configured": healthcheck_configured,
             "healthy_replicas": healthy,
             "ready": process_ready,
@@ -834,7 +926,7 @@ def _recover_stale_running_deploys_swarm(policies) -> None:
             if state is None:
                 continue
             group_ready, _group_failed, _group_observations = _swarm_process_group_health(
-                runtime, deploy.service
+                runtime, deploy.service, deploy=deploy
             )
             if not group_ready:
                 continue
@@ -1091,7 +1183,7 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
         # an in-flight replacement. The lifecycle worker owns such mutations.
         return
     running, group_failed, group_observations = _swarm_process_group_health(
-        runtime, deploy.service
+        runtime, deploy.service, deploy=deploy
     )
     now = timezone.now()
     with transaction.atomic():
@@ -1583,6 +1675,28 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
                     if service.status in {SERVICE_STATUS_CHOICES.STOPPING, SERVICE_STATUS_CHOICES.STOPPED}
                     else "running"
                 )
+
+            if desired_state == "running":
+                backend_runtime = getattr(runtime, "runtime", None) or runtime
+                group_ready, _group_failed, process_group = _swarm_process_group_health(
+                    backend_runtime,
+                    service,
+                    deploy=deploy,
+                )
+                if not group_ready:
+                    from dataclasses import replace
+                    from deployments.runtime.observations import RuntimeObservedStatus
+
+                    observed = replace(
+                        observed,
+                        status=RuntimeObservedStatus.DEGRADED,
+                        details={
+                            **dict(observed.details or {}),
+                            "process_group": process_group,
+                            "process_group_ready": False,
+                        },
+                    )
+
             desired = DesiredRuntimeState(
                 service_id=str(service.pk),
                 revision_id=str(getattr(getattr(service, "active_revision", None), "pk", "") or "") or None,
