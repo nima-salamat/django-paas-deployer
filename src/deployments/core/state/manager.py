@@ -969,6 +969,148 @@ class StateManager:
             return True
 
     @classmethod
+    def mark_deploy_retry_pending(
+        cls,
+        deploy_id: int,
+        *,
+        task_id: str,
+        message: str,
+        error_message: str = "",
+        stage: str = "retry_pending",
+        event_payload: Optional[dict] = None,
+    ) -> bool:
+        """Keep a recoverable attempt RUNNING while preserving its execution owner.
+
+        The same Celery task may reclaim this deployment on retry. If cancellation
+        won the race, this method commits a complete CANCELLED terminal event
+        instead of leaving a terminal row with an owner token or no outbox event.
+        """
+        from deploy.models import Deploy, DeploymentEventOutbox
+        from services.models import Service
+
+        owner = str(task_id or "")
+        if not owner:
+            return False
+
+        with transaction.atomic():
+            deploy = (
+                Deploy.objects.select_for_update()
+                .filter(pk=deploy_id)
+                .first()
+            )
+            if (
+                deploy is None
+                or sm.is_deploy_terminal(deploy.status)
+                or str(deploy.execution_task_id or "") != owner
+            ):
+                return False
+
+            service = (
+                Service.objects.select_for_update()
+                .filter(pk=deploy.service_id)
+                .first()
+            )
+            if service is None or str(service.task_id or "") != owner:
+                return False
+
+            now = timezone.now()
+            cancelled = bool(deploy.cancel_requested)
+            target = sm.DEPLOY_CANCELLED if cancelled else sm.DEPLOY_RUNNING
+            if not cancelled:
+                if deploy.status not in (sm.DEPLOY_PENDING, sm.DEPLOY_RUNNING):
+                    return False
+                safe_stage = str(stage or "retry_pending")[:64]
+                safe_message = str(message or "A temporary deployment failure occurred; retry is pending.")[:500]
+                updates = {
+                    "status": target,
+                    "stage": safe_stage,
+                    "status_message": safe_message,
+                    "error_message": str(error_message or "")[:1000],
+                    "worker_heartbeat_at": now,
+                    "updated_at": now,
+                }
+                Deploy.objects.filter(pk=deploy_id).update(**updates)
+                payload = dict(event_payload or {})
+                payload.setdefault("event_id", str(uuid.uuid4()))
+                payload.setdefault("trace_id", str(deploy_id))
+                payload.setdefault("deployment_id", str(deploy_id))
+                payload.setdefault("service_id", str(deploy.service_id))
+                payload.setdefault("revision_id", str(deploy.revision_id or ""))
+                payload.setdefault("task_id", owner)
+                payload.setdefault("event_type", "deployment.retry_pending.warning")
+                payload.setdefault("stage", safe_stage)
+                payload.setdefault("level", "warning")
+                payload.setdefault("message", safe_message)
+                payload.setdefault("progress", int(deploy.progress or 0))
+                payload.setdefault("details", {"recoverable": True, "retry_pending": True})
+                DeploymentEventOutbox.objects.create(
+                    deployment_id=deploy_id,
+                    service_id=str(deploy.service_id),
+                    event_id=payload["event_id"],
+                    event_type=str(payload["event_type"])[:128],
+                    stage=str(payload["stage"])[:64],
+                    level=str(payload["level"])[:16],
+                    occurred_at=now,
+                    payload=payload,
+                )
+                return True
+
+            cancellation_message = (
+                str(deploy.status_message or "").strip()
+                or str(deploy.error_message or "").strip()
+                or "Deployment cancelled by the user."
+            )[:500]
+            updates = {
+                "status": sm.DEPLOY_CANCELLED,
+                "stage": "cancelled",
+                "progress": 100,
+                "completed_at": now,
+                "worker_heartbeat_at": now,
+                "execution_task_id": "",
+                "status_message": cancellation_message,
+                "error_message": "",
+                "updated_at": now,
+            }
+            Deploy.objects.filter(pk=deploy_id).update(**updates)
+            payload = {
+                "event_id": str(uuid.uuid4()),
+                "trace_id": str(deploy_id),
+                "deployment_id": str(deploy_id),
+                "service_id": str(deploy.service_id),
+                "revision_id": str(deploy.revision_id or ""),
+                "task_id": owner,
+                "event_type": "deployment.cancelled.warning",
+                "stage": "cancelled",
+                "level": "warning",
+                "message": cancellation_message,
+                "progress": 100,
+                "details": {"cancellation_won_retry_race": True},
+            }
+            DeploymentEventOutbox.objects.create(
+                deployment_id=deploy_id,
+                service_id=str(deploy.service_id),
+                event_id=payload["event_id"],
+                event_type=payload["event_type"],
+                stage="cancelled",
+                level="warning",
+                occurred_at=now,
+                payload=payload,
+            )
+            if service.status in (sm.SERVICE_QUEUED, sm.SERVICE_DEPLOYING):
+                try:
+                    sm.check_service_transition(service.status, sm.SERVICE_STOPPED)
+                except sm.InvalidTransition:
+                    pass
+                else:
+                    Service.objects.filter(pk=service.pk).update(
+                        status=sm.SERVICE_STOPPED,
+                        desired_state="stopped",
+                        task_id=None,
+                        deploy_started=None,
+                    )
+            return False
+
+    @classmethod
     def transition_deploy_terminal_if_owned(
         cls,
         deploy_id: int,
