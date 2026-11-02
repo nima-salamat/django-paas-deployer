@@ -47,3 +47,13 @@ def test_rollback_recovery_requires_recorded_generation_and_active_revision():
     assert "rollback_deployment" in requeue
     assert "expected_active_revision_id" in stale
     assert "allow_active_revision_replacement=is_rollback" in stale
+
+
+def test_rollback_resolves_current_promoted_release_for_revisions_reused_by_rollbacks():
+    api = (ROOT / "deploy/apis.py").read_text(encoding="utf-8")
+    worker = (ROOT / "deployments/celery/services/rollback_service.py").read_text(encoding="utf-8")
+
+    assert 'revision_id=active_revision_id' in api
+    assert 'status="promoted"' in api
+    assert 'revision_id=current_deploy.revision_id' in worker
+    assert 'status="promoted"' in worker
