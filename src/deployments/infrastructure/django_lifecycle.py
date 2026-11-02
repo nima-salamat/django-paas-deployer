@@ -88,7 +88,8 @@ class DjangoDeploymentLifecycleStore:
                     or message
                     or ""
                 ),
-                stage=str((details or {}).get("stage") or "retry_pending"),
+                stage="retry_pending",
+                update_fields=updates,
                 event_payload={
                     "trace_id": str(context.operation_key),
                     "details": {
