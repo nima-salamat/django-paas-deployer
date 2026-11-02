@@ -1708,26 +1708,26 @@ class SwarmRuntime:
             confirmed_oom = oom_killed is True
             if confirmed_oom:
                 code = "SWARM_TASK_OOM_KILLED"
-                reason = "sigkill_oom_confirmed"
+                reason = "exit_137_oom_confirmed"
                 user_message = (
-                    "The application container was killed by the out-of-memory handler. "
+                    "Docker confirmed that the application container was OOM-killed. "
                     "Check its memory limit and the node's available memory."
                 )
                 cause = "Docker confirmed OOMKilled=true."
             else:
-                code = "SWARM_TASK_SIGKILL"
-                reason = "sigkill_oom_unconfirmed"
+                code = "SWARM_TASK_EXIT_137"
+                reason = "exit_137_oom_unconfirmed"
                 user_message = (
-                    "The application container was forcibly killed (SIGKILL). "
-                    "Docker did not confirm an out-of-memory kill, so the exact cause "
-                    "must be checked in the node and Docker daemon logs."
+                    "The application container exited with status 137. This is commonly "
+                    "associated with SIGKILL, but Docker did not confirm an OOM kill. "
+                    "Check the node and Docker daemon logs for the exact cause."
                 )
                 cause = (
-                    "Docker did not confirm OOMKilled=true; an OOM event, forced stop, "
-                    "or another external SIGKILL remains possible."
+                    "Exit status 137 is commonly associated with SIGKILL (128 + 9), "
+                    "but the exit status alone does not prove the signal or an OOM event."
                 )
             technical = (
-                f"Swarm task {task_id!r} exited with code 137 (SIGKILL). {cause} "
+                f"Swarm task {task_id!r} exited with status 137. {cause} "
                 f"oom_killed={oom_killed!r}; memory_limit_bytes={memory_limit_bytes!r}; "
                 f"memory_limit_mb={memory_limit_mb!r}; "
                 f"container_error={_safe_diagnostic(task_diagnostics.get('error'))!r}; "
@@ -1747,7 +1747,9 @@ class SwarmRuntime:
                 details={
                     **details,
                     "failure_reason": reason,
-                    "signal": "SIGKILL",
+                    "exit_status_interpretation": (
+                        "commonly SIGKILL (128 + 9), but not conclusive"
+                    ),
                     "oom_confirmed": confirmed_oom,
                     "oom_status": (
                         "confirmed" if confirmed_oom
@@ -2097,7 +2099,12 @@ class SwarmRuntime:
                 task for task in latest.tasks
                 if task.state.lower() in {"failed", "rejected"}
             ]
-            if failed and not restartable_failure:
+            if (
+                failed
+                and not restartable_failure
+                and not update_in_progress
+                and len(active) < desired
+            ):
                 task = max(
                     failed,
                     key=lambda item: str(item.status_timestamp or ""),
@@ -2197,31 +2204,39 @@ class SwarmRuntime:
             raise final_contract_failure
 
         final_exit_failure = None
-        final_task_diagnostics = []
-        for final_task in (latest.tasks if latest else ()):
+        final_active_tasks = [
+            task for task in (latest.tasks if latest else ())
+            if task.desired_state.lower() == "running"
+            and task.state.lower() in {
+                "new", "pending", "assigned", "accepted",
+                "preparing", "ready", "starting", "running",
+            }
+        ]
+        final_failed_tasks = [
+            task for task in (latest.tasks if latest else ())
+            if task.state.lower() in {"failed", "rejected"}
+        ]
+        # Historical failed tasks are useful context, but must not be promoted
+        # to the cause when a newer desired task is still pending or running.
+        if not final_active_tasks and final_failed_tasks:
+            final_task = max(
+                final_failed_tasks,
+                key=lambda item: str(item.status_timestamp or ""),
+            )
             diagnostics = self._task_container_diagnostics(final_task)
-            final_task_diagnostics.append(diagnostics)
-            final_combined = " ".join(
-                value for value in (
-                    str(final_task.error or ""),
-                    str(final_task.message or ""),
-                    str(diagnostics.get("error") or ""),
-                    str(service_logs[-4000:] if 'service_logs' in locals() else ""),
-                )
-                if value
-            ).lower()
-            if final_exit_failure is None:
-                final_exit_failure = self._startup_process_failure(
-                    service_name=name,
-                    task_id=final_task.task_id,
-                    exit_code=diagnostics.get("exit_code"),
-                    task_diagnostics=diagnostics,
-                    service_logs=self._service_logs_for_failure(name),
-                    expected_image=expected_image,
-                    provenance=provenance,
-                )
-                if final_exit_failure is not None:
-                    break
+            task_logs = self._task_logs_for_failure(final_task)
+            final_exit_failure = self._startup_process_failure(
+                service_name=name,
+                task_id=final_task.task_id,
+                exit_code=diagnostics.get("exit_code") or final_task.exit_code,
+                task_diagnostics=diagnostics,
+                service_logs=self._service_logs_for_failure(name),
+                task_logs=task_logs,
+                expected_image=expected_image,
+                task_error=final_task.error,
+                task_message=final_task.message,
+                provenance=provenance,
+            )
         if final_exit_failure is not None:
             raise final_exit_failure
 

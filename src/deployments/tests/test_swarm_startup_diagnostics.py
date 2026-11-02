@@ -105,10 +105,11 @@ def test_exit_137_without_oom_confirmation_is_reported_as_sigkill_not_oom():
     )
 
     assert failure is not None
-    assert failure.code == "SWARM_TASK_SIGKILL"
+    assert failure.code == "SWARM_TASK_EXIT_137"
     assert failure.details["oom_status"] == "not_confirmed"
-    assert failure.details["failure_reason"] == "sigkill_oom_unconfirmed"
-    assert "Docker did not confirm OOMKilled=true" in failure.technical_message
+    assert failure.details["failure_reason"] == "exit_137_oom_unconfirmed"
+    assert failure.details["exit_status_interpretation"].startswith("commonly SIGKILL")
+    assert "does not prove the signal or an OOM event" in failure.technical_message
 
 
 def test_exit_127_diagnostic_surfaces_missing_executable_and_redacts_secrets():

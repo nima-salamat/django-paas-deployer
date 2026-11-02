@@ -345,8 +345,9 @@ an application-process startup failure when the observed Swarm contract is
 valid. The diagnostic explicitly states that this evidence alone does not
 prove whether the artifact filesystem or its interpreter is missing.
 
-An observed `exit_code=137` is reported as a SIGKILL. It is classified as an
-OOM kill only when Docker's container inspection explicitly reports
+An observed `exit_code=137` is reported as exit status 137, commonly
+associated with SIGKILL but not conclusive proof of the signal. It is classified
+as an OOM kill only when Docker's container inspection explicitly reports
 `OOMKilled=true`. Otherwise the diagnostic says that OOM is unconfirmed and
 includes the exact task's container inspection and task-scoped logs; service
 logs are only a fallback because they may contain output from older tasks.
@@ -355,7 +356,9 @@ When the service has an automatic `on-failure`/ `any` restart policy and
 still desires replicas, readiness continues observing Swarm replacement
 scheduling until the overall readiness deadline. A fixed short grace period
 must not mark the deployment failed before a slower replacement becomes
-ready. If no replacement becomes ready before the deadline, the failed task's
+ready. Historical failures must not override a newer desired task that is
+still pending or running. If no replacement becomes ready before the deadline,
+only the newest failed task is eligible for exit-code classification; its
 exit/inspection diagnostics are reported.
 
 

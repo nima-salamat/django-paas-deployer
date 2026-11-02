@@ -285,6 +285,48 @@ class SwarmFailureRecoveryTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "SWARM_START_TIMEOUT")
         self.assertIn("application traceback", ctx.exception.details["service_logs"])
 
+    def test_old_failed_task_does_not_fail_while_desired_replacement_is_pending(self):
+        image = "demo:r1@sha256:new"
+        old_failed = {
+            "ID": "task-old-failed",
+            "DesiredState": "shutdown",
+            "Status": {
+                "State": "failed",
+                "Err": "task: non-zero exit (137)",
+                "Message": "previous task stopped",
+                "Timestamp": "2026-11-02T03:30:39Z",
+                "ContainerStatus": {"ExitCode": 137},
+            },
+            "Spec": {"ContainerSpec": {"Image": image}},
+        }
+        replacement_pending = {
+            "ID": "task-replacement",
+            "DesiredState": "running",
+            "Status": {
+                "State": "pending",
+                "Message": "replacement is being scheduled",
+                "Timestamp": "2026-11-02T03:30:51Z",
+            },
+            "Spec": {"ContainerSpec": {"Image": image}},
+        }
+        service = FakeService(image=image, tasks=[old_failed, replacement_pending])
+        service.attrs["Spec"]["TaskTemplate"]["RestartPolicy"] = {
+            "Condition": "none"
+        }
+        runtime = SwarmRuntime(FakeClient(service))
+
+        with (
+            patch("deployments.core.swarm.time.monotonic", side_effect=[0.0, 1.0, 2.0]),
+            patch("deployments.core.swarm.time.sleep"),
+        ):
+            with self.assertRaises(DeploymentError) as ctx:
+                runtime.wait_ready("demo", timeout=0.5, expected_image=image)
+
+        # The deployment is not ready, but the older exit 137 is not reported
+        # as the cause while a newer desired task is still pending.
+        self.assertEqual(ctx.exception.code, "SWARM_START_TIMEOUT")
+        self.assertIn("task-replacement", str(ctx.exception.details["tasks"]))
+
     def test_old_running_image_after_swarm_rollback_is_not_success(self):
         old_image = "demo:r0@sha256:old"
         new_image = "demo:r1@sha256:new"
