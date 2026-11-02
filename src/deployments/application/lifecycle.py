@@ -362,6 +362,36 @@ class DeploymentLifecycleExecutor:
             )
             if not transitioned:
                 return self._stale_result(context, error=error, runtime_result=applied)
+            if self.store.status == sm.DEPLOY_CANCELLED:
+                cancelled_error = DeploymentCancelled(
+                    "Deployment cancellation won the retry transition race.",
+                    stage="cancelled",
+                    user_message="Deployment cancelled by the user.",
+                    details={
+                        **dict(error.details or {}),
+                        **cleanup_details,
+                        "cancellation_won_retry_race": True,
+                    },
+                )
+                context.emit(
+                    "cancelled",
+                    cancelled_error.user_message,
+                    level="warning",
+                    progress=100,
+                    details=cancelled_error.details,
+                )
+                return DeploymentLifecycleResult(
+                    status=sm.DEPLOY_CANCELLED,
+                    success=False,
+                    retryable=False,
+                    runtime_result=applied,
+                    error=cancelled_error,
+                    rollback_performed=rollback_performed,
+                    rollback_failed=rollback_failed,
+                    cleanup_performed=cleanup_performed,
+                    cleanup_failed=cleanup_failed,
+                    details=cancelled_error.details,
+                )
             if error.recoverable and self.store.status == sm.DEPLOY_RUNNING:
                 context.emit(
                     "retry_waiting",
