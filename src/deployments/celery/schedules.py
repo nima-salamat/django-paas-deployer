@@ -669,6 +669,64 @@ def _recover_stale_running_deploys(policies) -> None:
 
 
 
+def _swarm_process_group_health(runtime, service: Service) -> tuple[bool, bool, list[dict]]:
+    """Observe every managed process service and all of its desired replicas.
+
+    The service-level runtime is a process graph, not necessarily a single
+    Swarm service. A deployment is ready only when every managed process has
+    all desired replicas running. API inspection failures are observations
+    of unknown state, never proof that a process has failed.
+    """
+    try:
+        names = runtime.service_names_for_service(str(service.pk))
+    except Exception:
+        logger.warning(
+            "Could not enumerate Swarm process services for service=%s.",
+            service.pk,
+            exc_info=True,
+        )
+        return False, False, []
+
+    if not names:
+        names = [service.get_docker_service_name()]
+
+    ready = True
+    terminal_failure = False
+    observations = []
+    for name in names:
+        try:
+            state = runtime.inspect_service(name)
+        except Exception:
+            logger.warning(
+                "Could not inspect Swarm process service %s for service=%s.",
+                name,
+                service.pk,
+                exc_info=True,
+            )
+            return False, False, observations
+
+        if state is None:
+            ready = False
+            observations.append({"name": name, "missing": True})
+            continue
+
+        desired = int(getattr(state, "replicas_desired", 0) or 0)
+        running = int(getattr(state, "replicas_running", 0) or 0)
+        process_ready = desired > 0 and running == desired
+        ready = ready and process_ready
+        failed = _swarm_has_terminal_runtime_failure(state)
+        terminal_failure = terminal_failure or failed
+        observations.append({
+            "name": str(name),
+            "replicas_desired": desired,
+            "replicas_running": running,
+            "ready": process_ready,
+            "terminal_failure": failed,
+            "update_state": getattr(state, "update_state", None),
+        })
+    return ready, terminal_failure, observations
+
+
 def _recover_stale_running_deploys_swarm(policies) -> None:
     """Recover stale workers from the Swarm service/task state."""
     stale_after = int(policies.get("stale_worker_seconds", 120))
@@ -687,7 +745,12 @@ def _recover_stale_running_deploys_swarm(policies) -> None:
         try:
             service_name = deploy.service.get_docker_service_name()
             state = runtime.inspect_service(service_name)
-            if state is None or state.replicas_running != 1:
+            if state is None:
+                continue
+            group_ready, _group_failed, _group_observations = _swarm_process_group_health(
+                runtime, deploy.service
+            )
+            if not group_ready:
                 continue
             docker_service = runtime.client.services.get(service_name)
             labels = ((docker_service.attrs or {}).get("Spec") or {}).get("Labels") or {}
@@ -900,7 +963,9 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
         # The service can legitimately be missing during a user-driven stop or
         # an in-flight replacement. The lifecycle worker owns such mutations.
         return
-    running = bool(state.replicas_running == 1)
+    running, group_failed, group_observations = _swarm_process_group_health(
+        runtime, deploy.service
+    )
     now = timezone.now()
     with transaction.atomic():
         locked = Deploy.objects.select_for_update().select_related("service").filter(pk=deploy.pk).first()
@@ -960,18 +1025,21 @@ def _reconcile_active_deploy_swarm(deploy: Deploy) -> None:
             stage = (locked.stage or "").strip().lower()
             if stage in PRE_CONTAINER_STAGES or int(locked.progress or 0) < 85:
                 return
-            if not _swarm_has_terminal_runtime_failure(state):
+            if not group_failed and not _swarm_has_terminal_runtime_failure(state):
                 logger.warning(
-                    "Swarm service %s has no running task during a restart/update; "
-                    "waiting for Swarm to converge.",
+                    "Swarm process group %s is not fully ready; waiting for desired replicas to converge: %s",
                     service_name,
+                    group_observations,
                 )
                 return
             mark_deploy_failed(
                 deploy=locked,
                 message="The Swarm service has no running task and no active restart attempt remains.",
                 stage="swarm_service_not_running",
-                details=_swarm_failure_details(runtime, service_name, state),
+                details={
+                    **_swarm_failure_details(runtime, service_name, state),
+                    "process_group": group_observations,
+                },
             )
             return
         if locked.status == DeploymentStatusChoices.ROLLING_BACK:
