@@ -19,9 +19,9 @@ def _integrity_constraint_name(exc: IntegrityError) -> str:
 class MaskedDBConfigField(serializers.JSONField):
     """Expose sensitive deployment config only to explicitly authorized viewers.
 
-    This field is used for application and database deployments. Secret values
-    can occur in nested env dictionaries, catalog-generated settings and DSN
-    strings, so redaction must be recursive and independent of platform.
+    Secrets can occur in nested environment dictionaries, catalog settings and
+    database connection strings. Redaction therefore applies recursively and
+    does not depend on the workload platform.
     """
 
     _SENSITIVE_TOKENS = (
@@ -43,20 +43,43 @@ class MaskedDBConfigField(serializers.JSONField):
         )
 
     @classmethod
-    def _redact(cls, value, secret_values=()):
+    def _redact(
+        cls,
+        value,
+        secret_values=(),
+        *,
+        allow_top_level_db_credentials=False,
+        path=(),
+    ):
         if isinstance(value, dict):
-            return {
-                key: (
-                    "[REDACTED]"
-                    if cls._sensitive_key(key)
-                    else cls._redact(item, secret_values)
+            output = {}
+            for key, item in value.items():
+                lowered = str(key).strip().lower().replace("-", "_")
+                allow_db_field = (
+                    allow_top_level_db_credentials
+                    and not path
+                    and lowered in {"password", "root_password", "username"}
                 )
-                for key, item in value.items()
-            }
-        if isinstance(value, list):
-            return [cls._redact(item, secret_values) for item in value]
-        if isinstance(value, tuple):
-            return [cls._redact(item, secret_values) for item in value]
+                if cls._sensitive_key(key) and not allow_db_field:
+                    output[key] = "[REDACTED]"
+                else:
+                    output[key] = cls._redact(
+                        item,
+                        secret_values,
+                        allow_top_level_db_credentials=allow_top_level_db_credentials,
+                        path=(*path, str(key)),
+                    )
+            return output
+        if isinstance(value, (list, tuple)):
+            return [
+                cls._redact(
+                    item,
+                    secret_values,
+                    allow_top_level_db_credentials=allow_top_level_db_credentials,
+                    path=(*path, str(index)),
+                )
+                for index, item in enumerate(value)
+            ]
         if isinstance(value, str):
             cleaned = cls._URL_CREDENTIALS.sub(r"\1[REDACTED]\2", value)
             cleaned = cls._INLINE_PASSWORD.sub(r"\1[REDACTED]", cleaned)
@@ -77,24 +100,35 @@ class MaskedDBConfigField(serializers.JSONField):
         service = getattr(deploy, "service", None) if deploy is not None else None
         user = getattr(request, "user", None) if request is not None else None
 
-        allow_secrets = False
-        if user is not None and service is not None and getattr(user, "is_authenticated", False):
-            if str(service.user_id) == str(getattr(user, "id", "")):
-                allow_secrets = True
-            else:
-                try:
-                    from services.api.sharing import user_can_access_service
-                    allowed, share = user_can_access_service(
-                        service, user, action="can_view_db_credentials"
-                    )
-                    allow_secrets = bool(
-                        allowed and share and share.allows("can_view_db_credentials")
-                    )
-                except Exception:
-                    allow_secrets = False
-
-        if allow_secrets:
+        is_owner = bool(
+            user is not None
+            and service is not None
+            and getattr(user, "is_authenticated", False)
+            and str(service.user_id) == str(getattr(user, "id", ""))
+        )
+        if is_owner:
             return data
+
+        # Database-credential permission is narrower than general Secret
+        # access. It may expose only top-level DB username/password fields;
+        # nested app env, DSNs, tokens and catalog secrets remain masked.
+        allow_top_level_db_credentials = False
+        if (
+            user is not None
+            and service is not None
+            and getattr(user, "is_authenticated", False)
+            and str(data.get("platform") or "").strip().lower() in DB_PLATFORMS
+        ):
+            try:
+                from services.api.sharing import user_can_access_service
+                allowed, share = user_can_access_service(
+                    service, user, action="can_view_db_credentials"
+                )
+                allow_top_level_db_credentials = bool(
+                    allowed and share and share.allows("can_view_db_credentials")
+                )
+            except Exception:
+                allow_top_level_db_credentials = False
 
         secret_values = set()
         try:
@@ -108,7 +142,12 @@ class MaskedDBConfigField(serializers.JSONField):
                 }
         except Exception:
             secret_values = set()
-        return self._redact(data, secret_values)
+
+        return self._redact(
+            data,
+            secret_values,
+            allow_top_level_db_credentials=allow_top_level_db_credentials,
+        )
 
 
 class DeployLogSerializer(serializers.ModelSerializer):
