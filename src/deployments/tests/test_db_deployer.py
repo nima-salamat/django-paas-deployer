@@ -43,26 +43,36 @@ def test_db_deploy_retry_path_allows_same_owned_celery_task_to_resume_running_de
     assert "self.retry(exc=retry_error" in task_source
 
 
-def test_db_replica_resolution_prefers_runtime_process_snapshot():
+def test_standalone_database_replica_resolution_fails_closed():
+    from deployments.common.exceptions import DeploymentError
     from deployments.core.db_deployer import _resolve_db_replicas
 
-    assert _resolve_db_replicas({"processes": [{"name": "web", "replicas": 3}]}) == 3
-    assert _resolve_db_replicas({"processes": [{"name": "database", "replicas": 4}]}) == 4
     assert _resolve_db_replicas({}) == 1
-    assert _resolve_db_replicas({"replicas": 2, "processes": [{"name": "web", "replicas": 5}]}) == 2
+    assert _resolve_db_replicas({"replicas": 1, "processes": [{"name": "web", "replicas": 1}]}) == 1
+    for cfg in (
+        {"replicas": 2},
+        {"processes": [{"name": "web", "replicas": 3}]},
+        {"processes": [{"name": "database", "replicas": 4}]},
+    ):
+        try:
+            _resolve_db_replicas(cfg)
+        except DeploymentError as exc:
+            assert exc.code == "DATABASE_CLUSTER_UNSUPPORTED"
+        else:
+            raise AssertionError(f"Unsafe database replica configuration was accepted: {cfg!r}")
 
 
-def test_ready_app_database_deploy_passes_resolved_replicas_to_swarm():
+def test_ready_app_database_deploy_uses_single_standalone_replica():
     runtime = MagicMock()
     runtime.apply_external_image_service.return_value = SimpleNamespace(
         service_id="swarm-service",
-        replicas_running=3,
+        replicas_running=1,
     )
 
     cfg = {
         "application_instance": "app-123",
         "catalog_service_key": "mariadb",
-        "processes": [{"name": "web", "process_type": "database", "replicas": 3, "enabled": True}],
+        "processes": [{"name": "web", "process_type": "database", "replicas": 1, "enabled": True}],
         "max_cpu": 1.0,
         "max_ram": 512,
         "username": "app",
@@ -92,7 +102,7 @@ def test_ready_app_database_deploy_passes_resolved_replicas_to_swarm():
         )
 
     assert result.success is True
-    assert runtime.apply_external_image_service.call_args.kwargs["replicas"] == 3
+    assert runtime.apply_external_image_service.call_args.kwargs["replicas"] == 1
 
 
 def test_ready_app_database_deploy_propagates_application_identity_labels():
