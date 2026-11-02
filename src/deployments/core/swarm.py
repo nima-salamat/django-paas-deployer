@@ -2125,7 +2125,7 @@ class SwarmRuntime:
                 failed
                 and not restartable_failure
                 and not update_in_progress
-                and len(active) < desired
+                and not active
             ):
                 task = max(
                     failed,
