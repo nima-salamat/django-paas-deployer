@@ -195,48 +195,160 @@ def stop(self, service_id, expected_lifecycle_generation=None) -> None:
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=10, name="deployments.celery.tasks.restart_service")
-def restart_service(self, service_id) -> None:
-    """Restart a running application through the selected runtime backend."""
-    try:
-        service = Service.objects.get(pk=service_id)
-        from deployments.infrastructure.django_runtime import DjangoRuntimeSelectionResolver
-        selection = DjangoRuntimeSelectionResolver().resolve(service=service, probe=False)
-        if selection.backend == "swarm":
-            runtime = DjangoRuntimeSelectionResolver().registry.resolve_adapter(selection)
-            runtime.restart_service_group(str(service.pk))
-            StateManager.transition_service(
-                service.pk,
-                SERVICE_STATUS_CHOICES.RUNNING,
-                update_fields={
-                    "desired_state": "running",
-                    "task_id": None,
-                    "deploy_started": None,
-                    "deployed_at": timezone.now(),
-                },
-            )
-            logger.info("Restarted runtime service group for service=%s", service_id)
-            return
+def restart_service(self, service_id, expected_lifecycle_generation=None) -> None:
+    """Restart the current runtime without rebuilding or mutating its Deploy."""
+    from deployments.core.state.locks import acquire_service_deployment_lock
+    from deployments.infrastructure.django_runtime import DjangoRuntimeSelectionResolver
 
-        # Legacy fallback keeps the existing deploy semantics.
-        from deployments.celery.services.stop_service import StopService
-        StopService().execute(str(service.pk))
-        deploy_item = get_active_deploy(service)
-        if deploy_item is None:
-            raise InvalidServiceStateError("Service has no active deployment.")
-        StateManager.transition_deploy(
-            deploy_item.pk,
-            DeploymentStatusChoices.PENDING,
-            update_fields={
-                "stage": "queued",
-                "progress": 0,
-                "status_message": "Restart queued.",
-            },
-        )
-        DeployService().execute(str(deploy_item.pk), task_id=str(self.request.id))
+    task_id = str(self.request.id or "")
+    try:
+        with acquire_service_deployment_lock(service_id):
+            service = Service.objects.filter(pk=service_id).first()
+            if service is None:
+                logger.info("Skipping restart for deleted service=%s.", service_id)
+                return
+
+            generation = int(service.lifecycle_generation or 0)
+            if (
+                expected_lifecycle_generation is not None
+                and generation != int(expected_lifecycle_generation)
+            ):
+                logger.info(
+                    "Skipping stale restart for service=%s expected_generation=%s actual_generation=%s.",
+                    service_id,
+                    expected_lifecycle_generation,
+                    generation,
+                )
+                return
+            if (
+                service.status != SERVICE_STATUS_CHOICES.QUEUED
+                or str(service.task_id or "") != task_id
+                or str(service.desired_state or "").lower() != "running"
+            ):
+                logger.info(
+                    "Skipping restart without current lifecycle ownership for service=%s status=%s task=%s owner=%s desired=%s.",
+                    service_id,
+                    service.status,
+                    task_id,
+                    service.task_id,
+                    service.desired_state,
+                )
+                return
+
+            resolver = DjangoRuntimeSelectionResolver()
+            selection = resolver.resolve(
+                service=service,
+                revision=getattr(service, "active_revision", None),
+                deployment=get_active_deploy(service),
+                probe=True,
+            )
+            if selection.backend == "swarm":
+                runtime = resolver.registry.resolve_adapter(selection)
+                result = runtime.restart_service_group(str(service.pk))
+                if not getattr(result, "success", False):
+                    raise DeploymentError(
+                        "The Swarm runtime did not confirm the service-group restart.",
+                        stage="restart",
+                        code="SWARM_RESTART_NOT_CONFIRMED",
+                        recoverable=True,
+                    )
+
+                backend = getattr(runtime, "runtime", None)
+                if backend is not None and hasattr(backend, "service_names_for_service"):
+                    names = backend.service_names_for_service(str(service.pk))
+                    observations = [backend.inspect_service(name) for name in names]
+                    incomplete = [
+                        {
+                            "name": name,
+                            "replicas_desired": int(state.replicas_desired or 0) if state else 0,
+                            "replicas_running": int(state.replicas_running or 0) if state else 0,
+                        }
+                        for name, state in zip(names, observations)
+                        if (
+                            state is None
+                            or int(state.replicas_desired or 0) <= 0
+                            or int(state.replicas_running or 0) != int(state.replicas_desired or 0)
+                        )
+                    ]
+                    if incomplete:
+                        raise DeploymentError(
+                            "Not every Swarm process replica returned to the running state after restart.",
+                            stage="restart_readiness",
+                            code="SWARM_RESTART_READINESS_FAILED",
+                            recoverable=True,
+                            details={"incomplete_processes": incomplete},
+                        )
+            elif selection.backend == "legacy_docker":
+                Container(service.get_docker_service_name()).restart()
+            else:
+                raise DeploymentError(
+                    f"Restart is not supported by runtime backend '{selection.backend}'.",
+                    stage="restart",
+                    code="RESTART_RUNTIME_UNSUPPORTED",
+                    user_message="The selected runtime backend does not support restart.",
+                )
+
+            with transaction.atomic():
+                locked = Service.objects.select_for_update().filter(pk=service_id).first()
+                if locked is None:
+                    return
+                if (
+                    int(locked.lifecycle_generation or 0) != generation
+                    or str(locked.task_id or "") != task_id
+                    or str(locked.desired_state or "").lower() != "running"
+                ):
+                    logger.info(
+                        "Runtime restart completed for service=%s but state projection lost its lifecycle fence.",
+                        service_id,
+                    )
+                    return
+                StateManager.transition_service(
+                    service_id,
+                    SERVICE_STATUS_CHOICES.RUNNING,
+                    update_fields={
+                        "desired_state": "running",
+                        "task_id": None,
+                        "deploy_started": None,
+                        "deployed_at": timezone.now(),
+                    },
+                )
+            logger.info("Restarted runtime service group for service=%s backend=%s", service_id, selection.backend)
+            return
+    except InvalidServiceStateError:
+        logger.info("Restart skipped for service=%s because its lifecycle state changed.", service_id)
+        return
     except Exception as exc:
         if self.request.retries < self.max_retries:
+            logger.warning(
+                "Restart failed for service=%s attempt=%s/%s: %s",
+                service_id,
+                self.request.retries + 1,
+                self.max_retries + 1,
+                exc,
+            )
             raise self.retry(exc=exc)
+
         logger.exception("Restart exhausted retries for service=%s", service_id)
+        try:
+            with transaction.atomic():
+                locked = Service.objects.select_for_update().filter(pk=service_id).first()
+                if (
+                    locked is not None
+                    and str(locked.task_id or "") == task_id
+                    and (
+                        expected_lifecycle_generation is None
+                        or int(locked.lifecycle_generation or 0) == int(expected_lifecycle_generation)
+                    )
+                    and locked.status == SERVICE_STATUS_CHOICES.QUEUED
+                ):
+                    StateManager.transition_service(
+                        service_id,
+                        SERVICE_STATUS_CHOICES.FAILED,
+                        update_fields={"task_id": None, "deploy_started": None},
+                    )
+        except Exception:
+            logger.exception("Failed to persist final restart failure for service=%s.", service_id)
+        raise
 
 @shared_task(bind=True, max_retries=0, name="deployments.celery.tasks.rollback_deployment")
 def rollback_deployment(
