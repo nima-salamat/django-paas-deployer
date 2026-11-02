@@ -13,9 +13,18 @@ from deployments.common import state_machine as sm
 class DjangoDeploymentLifecycleStore:
     """Persist lifecycle transitions through the fenced ``StateManager``."""
 
-    def __init__(self, deployment_id: int, *, task_id: str | None = None) -> None:
+    def __init__(
+        self,
+        deployment_id: int,
+        *,
+        task_id: str | None = None,
+        expected_active_revision_id: str | None = None,
+        allow_active_revision_replacement: bool = False,
+    ) -> None:
         self.deployment_id = deployment_id
         self.task_id = task_id
+        self.expected_active_revision_id = expected_active_revision_id
+        self.allow_active_revision_replacement = bool(allow_active_revision_replacement)
 
     @property
     def status(self) -> str:
@@ -91,6 +100,8 @@ class DjangoDeploymentLifecycleStore:
                 expected_lifecycle_generation=context.expected_lifecycle_generation,
                 expected_previous_deploy_id=context.expected_previous_deploy_id,
                 enforce_previous_deploy=context.enforce_previous_deploy,
+                expected_active_revision_id=self.expected_active_revision_id,
+                allow_active_revision_replacement=self.allow_active_revision_replacement,
                 update_fields={**updates, "stage": "finished", "progress": 100},
                 event_payload=event_payload,
             )
