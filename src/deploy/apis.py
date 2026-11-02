@@ -615,17 +615,193 @@ class DeployViewSet(ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def rollback(self, request, pk=None):
-        deploy = get_object_or_404(self.get_queryset(), pk=pk)
+        """Queue a rollback to the previous successfully promoted immutable Release."""
+        deploy = get_object_or_404(
+            self.get_queryset().select_related("service", "service__plan"),
+            pk=pk,
+        )
         denied = _require_deploy_service_action(deploy, request.user, "can_rebuild")
         if denied is not None:
             return denied
 
+        from deploy.models import Release
+        from deployments.core.state.manager import StateManager
+        from services.lifecycle import bump_lifecycle
+        from services.lifecycle.authority import get_authoritative_deploy
 
-        deploy.rollback_status = "pending"
-        deploy.save(update_fields=["rollback_status"])
+        task_id = make_uuid4()
+        try:
+            with transaction.atomic():
+                service = Service.objects.select_for_update().get(pk=deploy.service_id)
+                if service.status in (
+                    SERVICE_STATUS_CHOICES.QUEUED,
+                    SERVICE_STATUS_CHOICES.DEPLOYING,
+                    SERVICE_STATUS_CHOICES.STOPPING,
+                ):
+                    return Response(
+                        {"result": "error", "detail": _("The service already has an active lifecycle operation.")},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                if (
+                    service.status == SERVICE_STATUS_CHOICES.STOPPED
+                    or str(service.desired_state or "").lower() == "stopped"
+                ):
+                    return Response(
+                        {"result": "error", "detail": _("Start the service before requesting a release rollback.")},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
+                active_deploy = get_authoritative_deploy(service)
+                if active_deploy is None or str(active_deploy.pk) != str(deploy.pk):
+                    return Response(
+                        {
+                            "result": "error",
+                            "code": "ROLLBACK_DEPLOYMENT_NOT_ACTIVE",
+                            "detail": _("Rollback must be requested from the currently active deployment."),
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                active_deploy = (
+                    Deploy.objects.select_for_update()
+                    .select_related(
+                        "release_reference",
+                        "release_reference__revision",
+                        "release_reference__artifact",
+                    )
+                    .get(pk=active_deploy.pk)
+                )
+                current_release = active_deploy.release_reference
+                if current_release is None:
+                    current_release = (
+                        Release.objects.select_for_update()
+                        .filter(
+                            service_id=service.pk,
+                            revision_id=active_deploy.revision_id,
+                            status="promoted",
+                        )
+                        .select_related("revision", "artifact", "previous_release")
+                        .order_by("-promoted_at", "-created_at")
+                        .first()
+                    )
+                else:
+                    current_release = (
+                        Release.objects.select_for_update()
+                        .select_related(
+                            "revision",
+                            "artifact",
+                            "previous_release",
+                            "previous_release__revision",
+                            "previous_release__artifact",
+                        )
+                        .get(pk=current_release.pk)
+                    )
+
+                target_release = getattr(current_release, "previous_release", None)
+                if (
+                    current_release is None
+                    or current_release.status != "promoted"
+                    or target_release is None
+                    or target_release.service_id != service.pk
+                    or target_release.promoted_at is None
+                    or target_release.artifact_id is None
+                    or not str(getattr(target_release.artifact, "image_ref", "") or "").strip()
+                ):
+                    return Response(
+                        {
+                            "result": "error",
+                            "code": "ROLLBACK_RELEASE_UNAVAILABLE",
+                            "detail": _("No previously promoted immutable release is available for rollback."),
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
+                generation = bump_lifecycle(service.pk, desired_state="running")
+                now = timezone.now()
+                rollback_deploy = Deploy.objects.create(
+                    name=f"rollback-{uuid4().hex[:12]}",
+                    service=service,
+                    revision=target_release.revision,
+                    created_by=request.user,
+                    version=active_deploy.version,
+                    config=dict(target_release.revision.config_snapshot or {}),
+                    status=DeploymentStatusChoices.PENDING,
+                    stage="queued",
+                    progress=0,
+                    status_message="Rollback queued for the previous immutable release.",
+                    rollback_status="pending",
+                    execution_task_id=str(task_id),
+                    previous_deploy=active_deploy,
+                    release_reference=target_release,
+                    artifact=target_release.artifact,
+                    image_ref=target_release.artifact.image_ref,
+                    image_digest=target_release.artifact.digest,
+                    runtime_revision_id=str(target_release.revision_id),
+                    runtime_spec=dict(target_release.runtime_spec or {}),
+                    source_revision=str((target_release.provenance or {}).get("source_digest") or ""),
+                    operation="rollback",
+                    operation_started_at=now,
+                    operation_resource_id=str(target_release.pk),
+                    operation_previous_resource_id=str(current_release.pk),
+                )
+
+                StateManager.transition_service(
+                    service.pk,
+                    SERVICE_STATUS_CHOICES.QUEUED,
+                    update_fields={
+                        "desired_state": "running",
+                        "lifecycle_generation": generation,
+                        "task_id": str(task_id),
+                        "deploy_started": now,
+                    },
+                )
+                active_deploy.rollback_status = "pending"
+                active_deploy.save(update_fields=["rollback_status"])
+
+                from deployments.celery.tasks import rollback_deployment as rollback_task
+                rollback_deploy_id = str(rollback_deploy.pk)
+
+                def _enqueue_rollback() -> None:
+                    try:
+                        rollback_task.apply_async(
+                            args=[rollback_deploy_id],
+                            kwargs={
+                                "expected_lifecycle_generation": generation,
+                                "expected_previous_deploy_id": str(active_deploy.pk),
+                            },
+                            task_id=str(task_id),
+                            retry=True,
+                            retry_policy={
+                                "max_retries": 5,
+                                "interval_start": 0,
+                                "interval_step": 0.5,
+                                "interval_max": 3,
+                            },
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to enqueue rollback attempt=%s service=%s; "
+                            "the durable pending attempt remains available for recovery.",
+                            rollback_deploy_id,
+                            service.pk,
+                        )
+
+                transaction.on_commit(_enqueue_rollback)
+        except Exception:
+            logger.exception("Could not queue release rollback for deploy=%s.", deploy.pk)
+            return Response(
+                {"result": "error", "detail": _("Could not queue rollback.")},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         return Response(
-            {"result": "success", "detail": _(f"Rollback requested for {deploy.name}.")},
-            status=status.HTTP_200_OK,
+            {
+                "result": "success",
+                "detail": _("Rollback queued."),
+                "task_id": str(task_id),
+                "deployment_id": rollback_deploy_id,
+                "target_release_id": str(target_release.pk),
+            },
+            status=status.HTTP_202_ACCEPTED,
         )
 
     @action(detail=True, methods=["post"])
