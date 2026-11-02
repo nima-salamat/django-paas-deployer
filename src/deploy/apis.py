@@ -890,14 +890,26 @@ class DeployViewSet(ModelViewSet):
                 )
 
             from deployments.core.state.manager import StateManager
-            # A stopped service has no active runtime to tear down. Start the
-            # rebuild directly from QUEUED; active/failed services still enter
-            # STOPPING so Docker teardown is fenced by the lifecycle state.
-            if service.status != SERVICE_STATUS_CHOICES.STOPPED:
-                StateManager.transition_service(
-                    service.pk, SERVICE_STATUS_CHOICES.STOPPING,
-                    update_fields={"task_id": task_id, "deploy_started": timezone.now()},
-                )
+            from services.lifecycle import bump_lifecycle
+
+            # Every rebuild, including one from an already-stopped service,
+            # records a fenced teardown intent before Docker is touched. This
+            # removes the old STOPPED/STOPPING timing dependency on the event
+            # consumer and monitor.
+            teardown_generation = bump_lifecycle(
+                service.pk,
+                desired_state="stopped",
+            )
+            StateManager.transition_service(
+                service.pk,
+                SERVICE_STATUS_CHOICES.STOPPING,
+                update_fields={
+                    "task_id": task_id,
+                    "deploy_started": timezone.now(),
+                    "desired_state": "stopped",
+                    "lifecycle_generation": teardown_generation,
+                },
+            )
             StateManager.transition_deploy(
                 deploy.pk, "pending",
                 update_fields={
@@ -974,10 +986,13 @@ class DeployViewSet(ModelViewSet):
                     "error_message": translated.user_message,
                 },
             )
-            StateManager.transition_service(
-                service.pk, SERVICE_STATUS_CHOICES.FAILED,
-                update_fields={"task_id": None, "deploy_started": None},
-            )
+            failed_service = Service.objects.select_for_update().get(pk=service.pk)
+            if failed_service.status == SERVICE_STATUS_CHOICES.STOPPING:
+                StateManager.transition_service(
+                    failed_service.pk,
+                    SERVICE_STATUS_CHOICES.FAILED,
+                    update_fields={"task_id": None, "deploy_started": None},
+                )
             return Response(
                 {
                     "result": "error",
@@ -994,16 +1009,53 @@ class DeployViewSet(ModelViewSet):
         # from racing the container removal.
         with transaction.atomic():
             service = Service.objects.select_for_update().get(pk=service.pk)
+            if int(service.lifecycle_generation or 0) != int(teardown_generation):
+                return Response(
+                    {
+                        "result": "error",
+                        "code": "STALE_REBUILD_OPERATION",
+                        "detail": _("The service lifecycle changed during rebuild teardown. No new deployment was queued."),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if service.status == SERVICE_STATUS_CHOICES.STOPPING:
+                StateManager.transition_service(
+                    service.pk,
+                    SERVICE_STATUS_CHOICES.STOPPED,
+                    update_fields={
+                        "desired_state": "stopped",
+                        "task_id": None,
+                        "deploy_started": None,
+                    },
+                )
+            elif service.status != SERVICE_STATUS_CHOICES.STOPPED:
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("The previous runtime did not reach a stopped state. Rebuild was not queued."),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
             previous_active = get_active_deploy(service)
             previous_deploy_id = previous_active.pk if previous_active else None
             if previous_deploy_id == deploy.pk:
                 previous_deploy_id = None
             from deployments.core.state.manager import StateManager
+            from services.lifecycle import bump_lifecycle
+
+            execution_generation = bump_lifecycle(
+                service.pk,
+                desired_state="running",
+            )
             StateManager.transition_service(
-                service.pk, SERVICE_STATUS_CHOICES.QUEUED,
+                service.pk,
+                SERVICE_STATUS_CHOICES.QUEUED,
                 update_fields={
                     "deploy_started": timezone.now(),
                     "task_id": task_id,
+                    "desired_state": "running",
+                    "lifecycle_generation": execution_generation,
                 },
             )
             StateManager.transition_deploy(
