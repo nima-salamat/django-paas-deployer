@@ -1511,6 +1511,22 @@ class DeployService:
         state_tracker.finish(result)
 
         if not result.success and result.status != "cancelled":
+            # Cancellation may win inside the fenced StateManager terminal
+            # transition after the legacy orchestrator has already produced a
+            # failure-shaped result. The durable row is authoritative; do not
+            # turn an intentional cancellation into a failed Celery task.
+            durable_status = (
+                Deploy.objects.filter(pk=deploy_item.pk)
+                .values_list("status", flat=True)
+                .first()
+            )
+            if str(durable_status or "").lower() == "cancelled":
+                logger.info(
+                    "Legacy deployment %s was cancelled during terminalization; suppressing the stale failure result.",
+                    deploy_item.pk,
+                )
+                return result
+
             # The orchestrator's DeploymentResult.message already contains
             # the full diagnostic (including the underlying Docker error,
             # error_type, status_code, etc.).  We surface it verbatim so
