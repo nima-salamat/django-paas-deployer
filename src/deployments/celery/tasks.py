@@ -145,12 +145,33 @@ def deploy(self, deploy_id) -> None:
         # DeploymentError with recoverable=True MAY be retried.  Others
         # are permanent.  Legacy code retried on ANY DeploymentError,
         # wasting resources on bad Dockerfiles.
-        if getattr(exc, "recoverable", False) and self.request.retries < self.max_retries:
+        retry_owner = (
+            Deploy.objects.filter(
+                pk=deploy_id,
+                execution_task_id=str(self.request.id),
+                status__in=(
+                    DeploymentStatusChoices.PENDING,
+                    DeploymentStatusChoices.RUNNING,
+                ),
+                cancel_requested=False,
+            ).exists()
+        )
+        if (
+            getattr(exc, "recoverable", False)
+            and retry_owner
+            and self.request.retries < self.max_retries
+        ):
             logger.warning(
                 "Recoverable deployment error for deploy_id=%s (attempt %d/%d): %s",
                 deploy_id, self.request.retries + 1, self.max_retries + 1, exc,
             )
             raise self.retry(exc=exc)
+        if getattr(exc, "recoverable", False) and not retry_owner:
+            logger.info(
+                "Not retrying deployment %s because its attempt is already terminal or no longer owned by task=%s.",
+                deploy_id,
+                self.request.id,
+            )
         logger.exception("Permanent deployment error for deploy_id: %s", deploy_id)
         raise
     except Exception as exc:
