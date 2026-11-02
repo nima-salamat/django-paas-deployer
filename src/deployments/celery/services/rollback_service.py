@@ -131,8 +131,8 @@ class ReleaseRollbackService:
                 return
 
             target_release = deploy.release_reference
-            current_release = getattr(current_deploy, "release_reference", None)
-            if current_release is None and current_deploy is not None:
+            current_release = None
+            if current_deploy is not None:
                 current_release = (
                     Release.objects.filter(
                         service_id=service.pk,
@@ -143,6 +143,13 @@ class ReleaseRollbackService:
                     .order_by("-promoted_at", "-created_at")
                     .first()
                 )
+            if (
+                current_release is None
+                and current_deploy is not None
+                and getattr(current_deploy, "release_reference_id", None)
+                and current_deploy.release_reference.status == "promoted"
+            ):
+                current_release = current_deploy.release_reference
 
             if (
                 target_release is None
