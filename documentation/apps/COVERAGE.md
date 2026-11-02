@@ -200,6 +200,7 @@ Every production source surface must be mapped to its owning canonical document 
 - `src/deployments/celery/service_status.py` → [deployments](./deployments/README.md)
 - `src/deployments/celery/services/__init__.py` → [deployments](./deployments/README.md)
 - `src/deployments/celery/services/deploy_service.py` → [deployments](./deployments/README.md)
+- `src/deployments/celery/services/rollback_service.py` → [deployments](./deployments/README.md)
 - `src/deployments/celery/services/stop_service.py` → [deployments](./deployments/README.md)
 - `src/deployments/celery/tasks.py` → [deployments](./deployments/README.md)
 - `src/deployments/celery/validators.py` → [deployments](./deployments/README.md)
