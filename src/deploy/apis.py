@@ -1324,66 +1324,16 @@ class DeployViewSet(ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # For DB-platform deploys, the generic update would normally
-        # overwrite the entire ``config`` JSONField with whatever the
-        # client sends.  That's dangerous because the form cannot
-        # pre-fill password fields (they're masked in the API response),
-        # so a user editing just the username would accidentally wipe
-        # the password to "".
-        #
-        # Defense in depth: if this is a DB platform and the request
-        # includes a ``config`` dict, merge it with the existing config
-        # and drop any empty password sentinels before saving.
-        # Build a shallow mutable mapping so multipart UploadedFile objects
-        # remain intact and are never deep-copied.
+        # Database configuration edits are intentionally routed through
+        # update_db_config above. That action creates a new immutable
+        # ServiceRevision and applies engine-specific credential-rotation
+        # capability checks. Generic Deploy updates cannot bypass it.
         data = _shallow_request_data(request.data)
 
         # A deployment belongs to its original service. Ignore service in
         # generic update requests so an edit cannot move it across services.
-        # QueryDict/MultiValueDict.pop() does not accept a default
-        # positional argument. Remove the field only when it is present.
         if "service" in data:
             data.pop("service")
-
-        platform = _resolve_platform(deploy)
-        if platform in DB_PLATFORMS and "config" in data:
-            return Response(
-                {
-                    "error": _("Database configuration must be changed through the update_db_config action so a new immutable revision is created."),
-                    "code": "database_config_revision_required",
-                    "action": "update_db_config",
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-        if platform in DB_PLATFORMS and isinstance(data.get("config"), dict):
-            existing_cfg = _parse_deploy_config(getattr(deploy, "config", None))
-            incoming = dict(data["config"])
-            # Drop empty password sentinels — keep existing password.
-            for pw_key in ("password", "root_password"):
-                if incoming.get(pw_key) in (None, "", "__unchanged__"):
-                    incoming.pop(pw_key, None)
-            # Merge: existing values are the base; incoming values win
-            # for any key the client explicitly sent (except dropped
-            # password sentinels).  Always preserve platform.
-            merged = {**existing_cfg, **incoming, "platform": platform}
-            data["config"] = merged
-        elif platform in DB_PLATFORMS and isinstance(data.get("config"), str):
-            # Client sent config as a JSON string (e.g. from a textarea).
-            # Parse it, drop password sentinels, re-merge, re-stringify.
-            try:
-                incoming = json.loads(data["config"]) if data["config"].strip() else {}
-                if not isinstance(incoming, dict):
-                    incoming = {}
-            except (json.JSONDecodeError, ValueError):
-                # Let the serializer surface the validation error.
-                incoming = None
-            if incoming is not None:
-                existing_cfg = _parse_deploy_config(getattr(deploy, "config", None))
-                for pw_key in ("password", "root_password"):
-                    if incoming.get(pw_key) in (None, "", "__unchanged__"):
-                        incoming.pop(pw_key, None)
-                merged = {**existing_cfg, **incoming, "platform": platform}
-                data["config"] = json.dumps(merged)
 
         serializer = self.get_serializer(deploy, data=data, partial=True)
         if serializer.is_valid():
