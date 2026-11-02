@@ -122,3 +122,30 @@ def test_db_cancellation_uses_cancelled_deploy_state():
     assert 'str(stage or "").strip().lower() == "cancelled"' in method
     assert '"Database deployment cancelled."' in method
 
+
+
+def test_retry_pending_keeps_same_owner_and_commits_cancellation_atomically():
+    source = (ROOT / "deployments/core/state/manager.py").read_text(encoding="utf-8")
+    method = source.split("def mark_deploy_retry_pending", 1)[1].split(
+        "def transition_deploy_terminal_if_owned", 1
+    )[0]
+
+    assert "execution_task_id" in method
+    assert "service.task_id" in method
+    assert "if deploy.cancel_requested" in method
+    assert "DeploymentEventOutbox.objects.create" in method
+    assert '"retry_pending"' in method
+    assert "updates = {" in method
+
+
+def test_native_and_legacy_lifecycles_share_retry_pending_transition():
+    native = (ROOT / "deployments/infrastructure/django_lifecycle.py").read_text(encoding="utf-8")
+    legacy = (ROOT / "deploy/deployment_state.py").read_text(encoding="utf-8")
+    task = (ROOT / "deployments/celery/tasks.py").read_text(encoding="utf-8")
+
+    assert "StateManager.mark_deploy_retry_pending(" in native
+    assert "StateManager.mark_deploy_retry_pending(" in legacy
+    assert "allow_owned_retry=bool(self.request.retries)" in task
+    assert "allow_owned_retry=allow_owned_retry" in (
+        ROOT / "deployments/celery/services/deploy_service.py"
+    ).read_text(encoding="utf-8")
