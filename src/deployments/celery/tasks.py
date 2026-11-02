@@ -198,6 +198,7 @@ def stop(self, service_id, expected_lifecycle_generation=None) -> None:
 def restart_service(self, service_id, expected_lifecycle_generation=None) -> None:
     """Restart the current runtime without rebuilding or mutating its Deploy."""
     from deployments.core.state.locks import acquire_service_deployment_lock
+    from deployments.core.manager.container_manager import Container
     from deployments.infrastructure.django_runtime import DjangoRuntimeSelectionResolver
 
     task_id = str(self.request.id or "")
