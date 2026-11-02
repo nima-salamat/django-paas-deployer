@@ -81,6 +81,16 @@ class ReleaseRollbackService:
                     expected_lifecycle_generation,
                     generation,
                 )
+                StateManager.transition_deploy_terminal_if_owned(
+                    deploy.pk,
+                    "cancelled",
+                    task_id=str(task_id),
+                    update_fields={
+                        "stage": "cancelled",
+                        "status_message": "Rollback was superseded by a newer service lifecycle operation.",
+                        "rollback_status": RollbackStatusChoices.FAILED,
+                    },
+                )
                 return
 
             current_deploy = get_authoritative_deploy(service)
@@ -102,6 +112,22 @@ class ReleaseRollbackService:
                         "rollback_status": RollbackStatusChoices.FAILED,
                     },
                 )
+                latest = Service.objects.select_for_update().filter(pk=service.pk).first()
+                if (
+                    latest is not None
+                    and int(latest.lifecycle_generation or 0) == int(expected_lifecycle_generation)
+                    and str(latest.task_id or "") == str(task_id)
+                    and latest.status == "deploying"
+                ):
+                    StateManager.transition_service(
+                        service.pk,
+                        "running",
+                        update_fields={
+                            "desired_state": "running",
+                            "task_id": None,
+                            "deploy_started": None,
+                        },
+                    )
                 return
 
             target_release = deploy.release_reference
