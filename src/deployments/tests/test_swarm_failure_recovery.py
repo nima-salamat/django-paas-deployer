@@ -316,7 +316,7 @@ class SwarmFailureRecoveryTests(unittest.TestCase):
         runtime = SwarmRuntime(FakeClient(service))
 
         with (
-            patch("deployments.core.swarm.time.monotonic", side_effect=[0.0, 1.0, 2.0]),
+            patch("deployments.core.swarm.time.monotonic", side_effect=[0.0, 0.1, 1.0]),
             patch("deployments.core.swarm.time.sleep"),
         ):
             with self.assertRaises(DeploymentError) as ctx:
