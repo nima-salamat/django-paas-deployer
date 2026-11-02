@@ -1974,7 +1974,14 @@ class SwarmRuntime:
             )
 
             if terminal_without_replacement or service_scaled_to_zero:
-                task = terminal[-1] if terminal else latest.tasks[-1]
+                task = (
+                    max(
+                        terminal,
+                        key=lambda item: str(item.status_timestamp or ""),
+                    )
+                    if terminal
+                    else latest.tasks[-1]
+                )
                 service_logs = self._service_logs_for_failure(name)
                 exit_code = None
                 status_attrs = {}
@@ -2017,6 +2024,18 @@ class SwarmRuntime:
                     raise contract_failure
 
                 task_diagnostics = self._task_container_diagnostics(task)
+                if exit_code is None:
+                    exit_code = task_diagnostics.get("exit_code")
+                if exit_code is None:
+                    exit_code = getattr(task, "exit_code", None)
+                if exit_code is None:
+                    match = re.search(
+                        r"non-zero exit\s*\((\d+)\)",
+                        str(task.error or task.message or ""),
+                        flags=re.IGNORECASE,
+                    )
+                    if match:
+                        exit_code = int(match.group(1))
                 task_logs = self._task_logs_for_failure(task)
                 evidence_logs = task_logs if str(task_logs or "").strip() else service_logs
                 combined_error = " ".join(
@@ -2053,6 +2072,15 @@ class SwarmRuntime:
                     if service_scaled_to_zero
                     else "The Swarm task terminated before the service became ready."
                 )
+                log_source = (
+                    "task_container" if str(task_logs or "").strip()
+                    else "service_fallback"
+                )
+                try:
+                    from deploy.event_pipeline import sanitize
+                    safe_log_evidence = sanitize(evidence_logs[-12000:])
+                except Exception:
+                    safe_log_evidence = "[log excerpt withheld: sanitization unavailable]"
                 technical = (
                     f"Swarm readiness ended before a running task was available: "
                     f"service={name!r}; task_id={task.task_id}; state={task.state}; "
@@ -2066,7 +2094,7 @@ class SwarmRuntime:
                     f"service_image={latest.service_image!r}; "
                     f"update_state={latest.update_state!r}; "
                     f"update_message={latest.update_message or ''!r}; "
-                    f"service_logs={service_logs[-12000:]}"
+                    f"log_evidence_source={log_source!r}; task_logs={safe_log_evidence}"
                 )
                 raise DeploymentError(
                     technical,
@@ -2091,6 +2119,10 @@ class SwarmRuntime:
                         "service_image": latest.service_image,
                         "update_state": latest.update_state,
                         "update_message": latest.update_message,
+                        "exit_code": exit_code,
+                        "task_diagnostics": task_diagnostics,
+                        "task_logs": task_logs[-12000:],
+                        "log_evidence_source": log_source,
                         "service_logs": service_logs[-12000:],
                     },
                 )

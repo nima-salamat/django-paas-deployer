@@ -152,6 +152,37 @@ class SwarmFailureRecoveryTests(unittest.TestCase):
         self.assertIn("application traceback", exc.details["service_logs"])
         self.assertIn("non-zero exit (1)", exc.technical_message)
 
+    def test_terminal_task_uses_swarm_exit_code_when_second_inspection_is_empty(self):
+        image = "demo:r1@sha256:new"
+        failed_task = {
+            "ID": "task-137",
+            "DesiredState": "shutdown",
+            "Status": {
+                "State": "failed",
+                "Err": "task: non-zero exit (137)",
+                "Message": "process exited with code 137",
+                "Timestamp": "2026-11-02T03:30:39Z",
+                "ContainerStatus": {"ExitCode": 137},
+            },
+            "Spec": {"ContainerSpec": {"Image": image}},
+        }
+        service = FakeService(image=image, tasks=[failed_task])
+        service.attrs["Spec"]["TaskTemplate"]["RestartPolicy"] = {
+            "Condition": "none"
+        }
+        # The initial inspection has the exit code; the follow-up API read
+        # used to obtain ContainerStatus transiently returns no task.
+        service.tasks = MagicMock(side_effect=[[failed_task], []])
+        runtime = SwarmRuntime(FakeClient(service))
+
+        with patch("deployments.core.swarm.time.monotonic", side_effect=[0.0, 0.0]):
+            with self.assertRaises(DeploymentError) as ctx:
+                runtime.wait_ready("demo", timeout=1, expected_image=image)
+
+        self.assertEqual(ctx.exception.code, "SWARM_TASK_EXIT_137")
+        self.assertEqual(ctx.exception.details["exit_code"], 137)
+        self.assertEqual(ctx.exception.details["task_id"], "task-137")
+
     def test_shutdown_desired_terminal_task_fails_without_waiting_for_timeout(self):
         image = "demo:r1@sha256:new"
         service = FakeService(
