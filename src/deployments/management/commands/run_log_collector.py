@@ -280,8 +280,6 @@ class Command(BaseCommand):
 
         runtime = SwarmRuntime()
         client = runtime.client
-        services = list(Service.objects.select_related("plan").all()[:5000])
-        services_by_id = {str(service.pk): service for service in services}
 
         try:
             swarm_services = client.services.list(
@@ -290,6 +288,25 @@ class Command(BaseCommand):
         except Exception:
             logger.exception("Swarm service discovery failed")
             return
+
+        # Resolve only the Django services referenced by live managed Swarm
+        # services. A fixed [:5000] slice silently stopped log collection for
+        # every application beyond that primary-key ordering boundary.
+        service_ids = {
+            str(((docker_service.attrs or {}).get("Spec") or {}).get("Labels", {}).get("passdeployer.service") or "")
+            for docker_service in swarm_services
+        }
+        service_ids.discard("")
+        services_by_id = {}
+        service_id_values = list(service_ids)
+        for offset in range(0, len(service_id_values), 1000):
+            batch = service_id_values[offset:offset + 1000]
+            for service in (
+                Service.objects.filter(pk__in=batch)
+                .select_related("plan")
+                .iterator(chunk_size=1000)
+            ):
+                services_by_id[str(service.pk)] = service
 
         seen_keys: set[str] = set()
         matched = 0
