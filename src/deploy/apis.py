@@ -1239,6 +1239,50 @@ class DeployViewSet(ModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
+                # Official Postgres/Mongo/Oracle image environment variables
+                # initialize an empty data directory; changing them does not
+                # rotate credentials in an existing persistent database.
+                # MySQL/MariaDB have an explicit in-database reconciler. Redis
+                # supports password rotation through its managed requirepass
+                # command, but has no username/database mutation contract here.
+                relational_credential_keys = {
+                    "username", "password", "root_password", "database",
+                }
+                unsupported_mutations = set()
+                if platform in {"postgres", "postgresql", "mongodb", "mongo", "oracle"}:
+                    unsupported_mutations.update(
+                        set(updates).intersection(relational_credential_keys)
+                    )
+                elif platform == "redis":
+                    unsupported_mutations.update(
+                        set(updates).intersection({"username", "database"})
+                    )
+
+                env_update = updates.get("env")
+                if isinstance(env_update, dict) and platform not in {"mysql", "mariadb"}:
+                    sensitive_env_tokens = (
+                        "password", "secret", "token", "database_url",
+                        "connection", "dsn", "credential",
+                    )
+                    unsupported_mutations.update(
+                        f"env.{key}"
+                        for key in env_update
+                        if any(token in str(key).lower().replace("-", "_") for token in sensitive_env_tokens)
+                    )
+                if unsupported_mutations:
+                    return Response(
+                        {
+                            "result": "error",
+                            "code": "DATABASE_CREDENTIAL_ROTATION_UNSUPPORTED",
+                            "unsupported_fields": sorted(unsupported_mutations),
+                            "detail": _(
+                                "This database engine does not support in-place credential or database rotation yet. "
+                                "The existing database was not changed. Create a new database and migrate its data."
+                            ),
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
                 new_cfg = {**cfg, **updates, "platform": platform}
                 errors = validate_db_config(platform, new_cfg)
                 if errors:
@@ -1302,6 +1346,15 @@ class DeployViewSet(ModelViewSet):
             data.pop("service")
 
         platform = _resolve_platform(deploy)
+        if platform in DB_PLATFORMS and "config" in data:
+            return Response(
+                {
+                    "error": _("Database configuration must be changed through the update_db_config action so a new immutable revision is created."),
+                    "code": "database_config_revision_required",
+                    "action": "update_db_config",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         if platform in DB_PLATFORMS and isinstance(data.get("config"), dict):
             existing_cfg = _parse_deploy_config(getattr(deploy, "config", None))
             incoming = dict(data["config"])
