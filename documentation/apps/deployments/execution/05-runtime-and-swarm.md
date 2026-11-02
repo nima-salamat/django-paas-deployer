@@ -345,6 +345,12 @@ an application-process startup failure when the observed Swarm contract is
 valid. The diagnostic explicitly states that this evidence alone does not
 prove whether the artifact filesystem or its interpreter is missing.
 
+An observed `exit_code=137` is reported as a SIGKILL. It is classified as an
+OOM kill only when Docker's container inspection explicitly reports
+`OOMKilled=true`. Otherwise the diagnostic says that OOM is unconfirmed and
+includes the exact task's container inspection and task-scoped logs; service
+logs are only a fallback because they may contain output from older tasks.
+
 
 This is backend readiness, not necessarily application HTTP readiness.
 

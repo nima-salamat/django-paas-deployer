@@ -24,6 +24,93 @@ def test_task_logs_are_collected_from_the_exact_failed_container():
     )
 
 
+def test_swarm_task_state_preserves_exit_code_and_resource_limits():
+    runtime = object.__new__(SwarmRuntime)
+    runtime.client = MagicMock()
+    service = MagicMock()
+    service.tasks.return_value = [{
+        "ID": "task-137",
+        "DesiredState": "running",
+        "NodeID": None,
+        "Status": {
+            "State": "failed",
+            "Err": "task: non-zero exit (137)",
+            "Message": "process exited with code 137",
+            "Timestamp": "2026-11-02T03:30:39Z",
+            "ContainerStatus": {
+                "ContainerID": "container-137",
+                "ExitCode": 137,
+            },
+        },
+        "Spec": {
+            "ContainerSpec": {"Image": "wordpress:test"},
+            "Resources": {
+                "Limits": {"MemoryBytes": 536870912, "NanoCPUs": 1000000000}
+            },
+        },
+    }]
+
+    task = runtime._task_states(service)[0]
+
+    assert task.exit_code == 137
+    assert task.memory_limit_bytes == 536870912
+    assert task.nano_cpus == 1000000000
+
+
+def test_exit_137_is_classified_as_oom_only_when_docker_confirms_it():
+    runtime = object.__new__(SwarmRuntime)
+    failure = runtime._startup_process_failure(
+        service_name="app-wordpress",
+        task_id="task-137",
+        exit_code=137,
+        task_diagnostics={
+            "exit_code": 137,
+            "oom_killed": True,
+            "memory_limit_bytes": 536870912,
+            "memory_limit_swap_bytes": None,
+            "error": "",
+        },
+        service_logs="old task: wp-cron.php returned 200",
+        task_logs="PHP Fatal error: Allowed memory size exhausted; token=do-not-expose",
+        expected_image="wordpress:test",
+        task_error="task: non-zero exit (137)",
+        task_message="process exited with code 137",
+    )
+
+    assert failure is not None
+    assert failure.code == "SWARM_TASK_OOM_KILLED"
+    assert failure.details["failure_reason"] == "sigkill_oom_confirmed"
+    assert failure.details["oom_status"] == "confirmed"
+    assert failure.details["log_evidence_source"] == "task_container"
+    assert "wp-cron.php" not in failure.technical_message
+    assert "do-not-expose" not in failure.details["task_logs"]
+
+
+def test_exit_137_without_oom_confirmation_is_reported_as_sigkill_not_oom():
+    runtime = object.__new__(SwarmRuntime)
+    failure = runtime._startup_process_failure(
+        service_name="app-wordpress",
+        task_id="task-137",
+        exit_code=137,
+        task_diagnostics={
+            "exit_code": 137,
+            "oom_killed": False,
+            "memory_limit_bytes": 1073741824,
+            "error": "",
+        },
+        service_logs="",
+        task_logs="",
+        expected_image="wordpress:test",
+        task_error="task: non-zero exit (137)",
+    )
+
+    assert failure is not None
+    assert failure.code == "SWARM_TASK_SIGKILL"
+    assert failure.details["oom_status"] == "not_confirmed"
+    assert failure.details["failure_reason"] == "sigkill_oom_unconfirmed"
+    assert "Docker did not confirm OOMKilled=true" in failure.technical_message
+
+
 def test_exit_127_diagnostic_surfaces_missing_executable_and_redacts_secrets():
     runtime = object.__new__(SwarmRuntime)
     failure = runtime._startup_process_failure(

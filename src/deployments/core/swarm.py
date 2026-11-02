@@ -50,6 +50,9 @@ class SwarmTaskState:
     container_id: str | None = None
     status_timestamp: str | None = None
     health_status: str | None = None
+    exit_code: int | None = None
+    memory_limit_bytes: int | None = None
+    nano_cpus: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1153,6 +1156,21 @@ class SwarmRuntime:
 
             task_spec = (task.get("Spec") or {}).get("ContainerSpec") or {}
             task_image = str(task_spec.get("Image") or "").strip() or None
+            resource_limits = (
+                ((task.get("Spec") or {}).get("Resources") or {}).get("Limits") or {}
+            )
+            try:
+                exit_code = int(container_status.get("ExitCode"))
+            except (TypeError, ValueError):
+                exit_code = None
+            try:
+                memory_limit_bytes = int(resource_limits.get("MemoryBytes"))
+            except (TypeError, ValueError):
+                memory_limit_bytes = None
+            try:
+                nano_cpus = int(resource_limits.get("NanoCPUs"))
+            except (TypeError, ValueError):
+                nano_cpus = None
             node_name = None
             node_id = task.get("NodeID")
             if node_id:
@@ -1175,6 +1193,9 @@ class SwarmRuntime:
                     container_id=container_id,
                     status_timestamp=str(status.get("Timestamp") or "") or None,
                     health_status=health_status,
+                    exit_code=exit_code,
+                    memory_limit_bytes=memory_limit_bytes,
+                    nano_cpus=nano_cpus,
                 )
             )
         return tuple(rows)
@@ -1402,6 +1423,10 @@ class SwarmRuntime:
             "task_id": task.task_id,
             "container_id": task.container_id,
             "health_status": task.health_status,
+            "exit_code": task.exit_code,
+            "oom_killed": None,
+            "memory_limit_bytes": task.memory_limit_bytes,
+            "nano_cpus": task.nano_cpus,
         }
         if not task.container_id:
             return result
@@ -1411,6 +1436,7 @@ class SwarmRuntime:
             attrs = container.attrs or {}
             state = attrs.get("State") or {}
             config = attrs.get("Config") or {}
+            host_config = attrs.get("HostConfig") or {}
             health = state.get("Health") or {}
             health_log = health.get("Log") or []
             recent_health = []
@@ -1433,8 +1459,19 @@ class SwarmRuntime:
                     "health_failing_streak": health.get("FailingStreak"),
                     "running": state.get("Running"),
                     "restarting": state.get("Restarting"),
-                    "exit_code": state.get("ExitCode"),
+                    "exit_code": (
+                        state.get("ExitCode")
+                        if state.get("ExitCode") is not None
+                        else task.exit_code
+                    ),
                     "oom_killed": state.get("OOMKilled"),
+                    "memory_limit_bytes": (
+                        int(host_config.get("Memory") or 0)
+                        or task.memory_limit_bytes
+                    ),
+                    "memory_swap_limit_bytes": int(host_config.get("MemorySwap") or 0) or None,
+                    "nano_cpus": int(host_config.get("NanoCpus") or 0) or task.nano_cpus,
+                    "container_image": str(config.get("Image") or ""),
                     "error": str(state.get("Error") or ""),
                     "started_at": str(state.get("StartedAt") or ""),
                     "finished_at": str(state.get("FinishedAt") or ""),
@@ -1522,12 +1559,13 @@ class SwarmRuntime:
         task_logs: str = "",
         provenance: Mapping[str, Any] | None = None,
     ) -> DeploymentError | None:
-        """Classify deterministic process-level startup failures from observed evidence.
+        """Classify process-level startup failures from exact task evidence.
 
         Service logs can include output from old/replaced Swarm tasks. Prefer logs
         collected directly from this task's container whenever available.
         """
         evidence_logs = task_logs if str(task_logs or "").strip() else service_logs
+        evidence_source = "task_container" if str(task_logs or "").strip() else "service_fallback"
         combined = " ".join(
             value for value in (
                 str(task_error or ""),
@@ -1541,21 +1579,32 @@ class SwarmRuntime:
         ).lower()
 
         def _safe_diagnostic(value: Any, *, limit: int = 600) -> str:
-            text = str(value or "").replace("\n", " ").replace("\r", " ")
+            text = str(value or "").replace("\\n", " ").replace("\\r", " ")
             text = re.sub(
-                r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization)\b"
-                r"(\s*[:=]\s*|\s+)[^\s,;]+",
-                r"\1=[REDACTED]",
+                r"(?i)\\b(password|passwd|secret|token|api[_-]?key|authorization)\\b"
+                r"(\\s*[:=]\\s*|\\s+)[^\\s,;]+",
+                r"\\1=[REDACTED]",
                 text,
             )
             return text[:limit]
+
+        def _safe_log_excerpt(value: Any, *, limit: int = 12000) -> str:
+            text = str(value or "")
+            text = re.sub(
+                r"(?i)\\b(password|passwd|secret|token|api[_-]?key|authorization)\\b"
+                r"(\\s*[:=]\\s*|\\s+)[^\\s,;]+",
+                r"\\1=[REDACTED]",
+                text,
+            )
+            return text[-limit:]
 
         matching_log_lines = [
             _safe_diagnostic(line, limit=500)
             for line in (evidence_logs or "").splitlines()
             if re.search(
                 r"not found|no such file|exec:|error|fatal|permission denied|"
-                r"command not found|cannot execute|failed to start",
+                r"command not found|cannot execute|failed to start|oom|out of memory|"
+                r"killed process|signal 9",
                 line,
                 flags=re.IGNORECASE,
             )
@@ -1569,10 +1618,12 @@ class SwarmRuntime:
             "expected_image": expected_image,
             "task_error": _safe_diagnostic(task_error),
             "task_message": _safe_diagnostic(task_message),
-            "task_diagnostics": task_diagnostics,
-            "task_logs": task_logs[-12000:],
-            "service_logs": service_logs[-12000:],
-            "log_evidence_source": "task_container" if str(task_logs or "").strip() else "service_fallback",
+            "task_diagnostics": dict(task_diagnostics),
+            "task_logs": _safe_log_excerpt(task_logs),
+            "service_logs": _safe_log_excerpt(service_logs),
+            "log_evidence_source": evidence_source,
+            "matching_task_log_lines": matching_log_lines,
+            # Keep the old key for clients that already display it.
             "matching_service_log_lines": matching_log_lines,
         }
         if "exec format error" in combined:
@@ -1632,7 +1683,7 @@ class SwarmRuntime:
                 f"entrypoint_executable={_safe_diagnostic(first_entrypoint)!r}; "
                 f"container_args_executable={_safe_diagnostic(first_command)!r}; "
                 f"image_cmd_executable={_safe_diagnostic(first_cmd)!r}; "
-                f"matching_service_log_lines={matching_log_lines!r}"
+                f"matching_task_log_lines={matching_log_lines!r}"
             )
             return DeploymentError(
                 technical,
@@ -1645,6 +1696,67 @@ class SwarmRuntime:
                 technical_message=technical,
                 certainty=FailureCertainty.OBSERVED,
                 details={**details, "failure_reason": "exit_127_not_found"},
+            )
+        if exit_code == 137:
+            oom_killed = task_diagnostics.get("oom_killed")
+            memory_limit_bytes = task_diagnostics.get("memory_limit_bytes")
+            memory_limit_mb = (
+                round(int(memory_limit_bytes) / (1024 * 1024), 1)
+                if memory_limit_bytes not in (None, "", 0, "0")
+                else None
+            )
+            confirmed_oom = oom_killed is True
+            if confirmed_oom:
+                code = "SWARM_TASK_OOM_KILLED"
+                reason = "sigkill_oom_confirmed"
+                user_message = (
+                    "The application container was killed by the out-of-memory handler. "
+                    "Check its memory limit and the node's available memory."
+                )
+                cause = "Docker confirmed OOMKilled=true."
+            else:
+                code = "SWARM_TASK_SIGKILL"
+                reason = "sigkill_oom_unconfirmed"
+                user_message = (
+                    "The application container was forcibly killed (SIGKILL). "
+                    "Docker did not confirm an out-of-memory kill, so the exact cause "
+                    "must be checked in the node and Docker daemon logs."
+                )
+                cause = (
+                    "Docker did not confirm OOMKilled=true; an OOM event, forced stop, "
+                    "or another external SIGKILL remains possible."
+                )
+            technical = (
+                f"Swarm task {task_id!r} exited with code 137 (SIGKILL). {cause} "
+                f"oom_killed={oom_killed!r}; memory_limit_bytes={memory_limit_bytes!r}; "
+                f"memory_limit_mb={memory_limit_mb!r}; "
+                f"container_error={_safe_diagnostic(task_diagnostics.get('error'))!r}; "
+                f"inspection_error={_safe_diagnostic(task_diagnostics.get('inspection_error'))!r}; "
+                f"task_error={_safe_diagnostic(task_error)!r}; "
+                f"task_message={_safe_diagnostic(task_message)!r}; "
+                f"log_evidence_source={evidence_source!r}; "
+                f"matching_task_log_lines={matching_log_lines!r}"
+            )
+            return DeploymentError(
+                technical,
+                stage="swarm_startup",
+                code=code,
+                user_message=user_message,
+                technical_message=technical,
+                certainty=FailureCertainty.OBSERVED,
+                details={
+                    **details,
+                    "failure_reason": reason,
+                    "signal": "SIGKILL",
+                    "oom_confirmed": confirmed_oom,
+                    "oom_status": (
+                        "confirmed" if confirmed_oom
+                        else "not_confirmed" if oom_killed is False
+                        else "unknown"
+                    ),
+                    "memory_limit_bytes": memory_limit_bytes,
+                    "memory_limit_mb": memory_limit_mb,
+                },
             )
         return None
 
@@ -1982,7 +2094,10 @@ class SwarmRuntime:
                 if task.state.lower() in {"failed", "rejected"}
             ]
             if failed and not restartable_backoff:
-                task = failed[0]
+                task = max(
+                    failed,
+                    key=lambda item: str(item.status_timestamp or ""),
+                )
                 task_detail = task.error or task.message or task.state
                 service_logs = self._service_logs_for_failure(name)
                 contract_failure = self._runtime_contract_failure(
@@ -1995,33 +2110,45 @@ class SwarmRuntime:
                     raise contract_failure
                 task_diagnostics = self._task_container_diagnostics(task)
                 exit_code = task_diagnostics.get("exit_code")
-                combined_error = " ".join(
-                    value for value in (
-                        str(task_detail or ""),
-                        str(task_diagnostics.get("error") or ""),
-                        str(service_logs[-4000:] or ""),
+                if exit_code is None:
+                    exit_code = task.exit_code
+                if exit_code is None:
+                    match = re.search(
+                        r"non-zero exit\\s*\\((\\d+)\\)",
+                        str(task.error or task.message or ""),
+                        flags=re.IGNORECASE,
                     )
-                    if value
-                ).lower()
+                    if match:
+                        exit_code = int(match.group(1))
+                        task_diagnostics["exit_code"] = exit_code
+                task_logs = self._task_logs_for_failure(task)
                 startup_failure = self._startup_process_failure(
                     service_name=name,
                     task_id=task.task_id,
                     exit_code=exit_code,
                     task_diagnostics=task_diagnostics,
                     service_logs=service_logs,
+                    task_logs=task_logs,
                     expected_image=expected_image,
+                    task_error=task.error,
+                    task_message=task.message,
                     provenance=provenance,
                 )
                 if startup_failure is not None:
                     raise startup_failure
+                log_evidence = task_logs if str(task_logs or "").strip() else service_logs
                 technical = (
                     f"Swarm task failed: {task_detail}; "
                     f"task_id={task.task_id}; node={task.node_name or task.node_id or ''}; "
+                    f"container_id={task.container_id or ''}; exit_code={exit_code!r}; "
+                    f"oom_killed={task_diagnostics.get('oom_killed')!r}; "
+                    f"memory_limit_bytes={task_diagnostics.get('memory_limit_bytes')!r}; "
+                    f"container_error={task_diagnostics.get('error') or ''!r}; "
                     f"expected_image={expected_image!r}; task_image={task.image!r}; "
                     f"service_image={latest.service_image!r}; "
                     f"update_state={latest.update_state!r}; "
                     f"update_message={latest.update_message or ''!r}; "
-                    f"service_logs={service_logs[-12000:]}"
+                    f"task_logs={log_evidence[-4000:]}"
                 )
                 raise DeploymentError(
                     technical,
@@ -2031,8 +2158,13 @@ class SwarmRuntime:
                     technical_message=technical,
                     details={
                         "task_id": task.task_id,
+                        "desired_state": task.desired_state,
+                        "state": task.state,
+                        "status_timestamp": task.status_timestamp,
                         "node_id": task.node_id,
                         "node_name": task.node_name,
+                        "container_id": task.container_id,
+                        "exit_code": exit_code,
                         "error": task.error,
                         "message": task.message,
                         "task_image": task.image,
@@ -2040,6 +2172,12 @@ class SwarmRuntime:
                         "service_image": latest.service_image,
                         "update_state": latest.update_state,
                         "update_message": latest.update_message,
+                        "task_diagnostics": task_diagnostics,
+                        "task_logs": task_logs[-12000:],
+                        "log_evidence_source": (
+                            "task_container" if str(task_logs or "").strip()
+                            else "service_fallback"
+                        ),
                         "service_logs": service_logs[-12000:],
                     },
                 )
