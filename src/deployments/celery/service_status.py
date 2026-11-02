@@ -56,11 +56,13 @@ class ServiceStateManager:
         deploy_id: int,
         *,
         task_id: str | None = None,
+        allow_owned_retry: bool = False,
     ) -> Deploy:
         """Delegate deployment acquisition without dropping the execution owner."""
         return StateManager.lock_and_get_deployment(
             deploy_id,
             task_id=task_id,
+            allow_owned_retry=allow_owned_retry,
         )
 
     @classmethod
