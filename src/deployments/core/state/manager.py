@@ -181,6 +181,12 @@ class StateManager:
         ):
             return
 
+        desired_state = str(getattr(service, "desired_state", "") or "").strip().lower()
+        # Service deletion has its own orchestrator and generation fence. A
+        # cancelled child deployment must never resurrect that service.
+        if desired_state == "deleted":
+            return
+
         info = dict(details or {})
         cleanup_failed = bool(
             info.get("cleanup_failed")
@@ -192,16 +198,27 @@ class StateManager:
         )
         if cleanup_failed:
             target = SERVICE_STATUS_CHOICES.FAILED
+            projected_desired_state = desired_state or (
+                "running" if has_previous_revision else "stopped"
+            )
+        elif desired_state == "stopped":
+            target = SERVICE_STATUS_CHOICES.STOPPED
+            projected_desired_state = "stopped"
+        elif desired_state == "running" and has_previous_revision:
+            target = SERVICE_STATUS_CHOICES.RUNNING
+            projected_desired_state = "running"
         elif has_previous_revision:
             target = SERVICE_STATUS_CHOICES.RUNNING
+            projected_desired_state = "running"
         else:
             target = SERVICE_STATUS_CHOICES.STOPPED
+            projected_desired_state = "stopped"
 
         cls.transition_service(
             service.pk,
             target,
             update_fields={
-                "desired_state": "running" if has_previous_revision else "stopped",
+                "desired_state": projected_desired_state,
                 "task_id": None,
                 "deploy_started": None,
             },
