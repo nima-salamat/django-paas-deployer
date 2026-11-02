@@ -86,7 +86,7 @@ def test_exit_137_is_classified_as_oom_only_when_docker_confirms_it():
     assert "do-not-expose" not in failure.details["task_logs"]
 
 
-def test_exit_137_without_oom_confirmation_is_reported_as_sigkill_not_oom():
+def test_exit_137_without_oom_confirmation_is_reported_conservatively():
     runtime = object.__new__(SwarmRuntime)
     failure = runtime._startup_process_failure(
         service_name="app-wordpress",
