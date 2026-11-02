@@ -536,7 +536,13 @@ class StateManager:
             return True
 
     @classmethod
-    def lock_and_get_deployment(cls, deploy_id: int, *, task_id: str | None = None):
+    def lock_and_get_deployment(
+        cls,
+        deploy_id: int,
+        *,
+        task_id: str | None = None,
+        allow_owned_retry: bool = False,
+    ):
         """
         Atomically:
           * Lock the Deploy + Service rows.
@@ -584,6 +590,29 @@ class StateManager:
                         "actual_task_id": deploy.execution_task_id,
                     },
                 )
+            from deploy.models import DeploymentStatusChoices  # type: ignore
+            if (
+                allow_owned_retry
+                and task_id
+                and str(service.task_id or "") == str(task_id)
+                and str(deploy.execution_task_id or "") == str(task_id)
+                and service.status == SERVICE_STATUS_CHOICES.DEPLOYING
+                and deploy.status == DeploymentStatusChoices.RUNNING
+                and not deploy.cancel_requested
+            ):
+                # A recoverable attempt remains RUNNING/DEPLOYING while Celery
+                # applies its bounded retry policy. Only the same Celery task
+                # identity may reclaim it; a different worker or a terminal row
+                # must never reuse this path.
+                Deploy.objects.filter(pk=deploy.pk).update(
+                    worker_heartbeat_at=timezone.now(),
+                    stage="retrying",
+                    status_message="Retrying a recoverable deployment operation.",
+                    updated_at=timezone.now(),
+                )
+                deploy.refresh_from_db()
+                return deploy
+
             if service.status != SERVICE_STATUS_CHOICES.QUEUED:
                 raise InvalidServiceStateError(
                     f"Deploy aborted. Service status is {service.status}, "
