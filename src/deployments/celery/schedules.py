@@ -924,6 +924,11 @@ def _recover_stale_running_deploys_swarm(policies) -> None:
                 if not committed:
                     logger.info("Refusing stale Swarm recovery success for deploy=%s", locked.pk)
                     continue
+                if is_rollback and locked.previous_deploy_id:
+                    Deploy.objects.filter(pk=locked.previous_deploy_id).update(
+                        rollback_status="succeeded",
+                        updated_at=timezone.now(),
+                    )
                 StateManager.transition_service(
                     locked.service_id, SERVICE_STATUS_CHOICES.RUNNING,
                     update_fields={"deployed_at": timezone.now(), "deploy_started": None, "task_id": None},
