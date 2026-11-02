@@ -1467,10 +1467,10 @@ class SwarmRuntime:
                     "oom_killed": state.get("OOMKilled"),
                     "memory_limit_bytes": (
                         int(host_config.get("Memory") or 0)
-                        or task.memory_limit_bytes
+                        or getattr(task, "memory_limit_bytes", None)
                     ),
                     "memory_swap_limit_bytes": int(host_config.get("MemorySwap") or 0) or None,
-                    "nano_cpus": int(host_config.get("NanoCpus") or 0) or task.nano_cpus,
+                    "nano_cpus": int(host_config.get("NanoCpus") or 0) or getattr(task, "nano_cpus", None),
                     "container_image": str(config.get("Image") or ""),
                     "error": str(state.get("Error") or ""),
                     "started_at": str(state.get("StartedAt") or ""),
