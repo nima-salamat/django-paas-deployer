@@ -712,7 +712,17 @@ def _swarm_process_group_health(runtime, service: Service) -> tuple[bool, bool, 
 
         desired = int(getattr(state, "replicas_desired", 0) or 0)
         running = int(getattr(state, "replicas_running", 0) or 0)
-        process_ready = desired > 0 and running == desired
+        healthcheck_configured = bool(getattr(state, "healthcheck_configured", False))
+        healthy = sum(
+            1
+            for task in (getattr(state, "tasks", ()) or ())
+            if str(getattr(task, "health_status", "") or "").lower() == "healthy"
+        )
+        process_ready = (
+            desired > 0
+            and running == desired
+            and (not healthcheck_configured or healthy >= desired)
+        )
         ready = ready and process_ready
         failed = _swarm_has_terminal_runtime_failure(state)
         terminal_failure = terminal_failure or failed
@@ -720,6 +730,8 @@ def _swarm_process_group_health(runtime, service: Service) -> tuple[bool, bool, 
             "name": str(name),
             "replicas_desired": desired,
             "replicas_running": running,
+            "healthcheck_configured": healthcheck_configured,
+            "healthy_replicas": healthy,
             "ready": process_ready,
             "terminal_failure": failed,
             "update_state": getattr(state, "update_state", None),
