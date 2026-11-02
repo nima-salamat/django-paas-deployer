@@ -49,6 +49,14 @@ def test_standalone_database_replica_resolution_fails_closed():
 
     assert _resolve_db_replicas({}) == 1
     assert _resolve_db_replicas({"replicas": 1, "processes": [{"name": "web", "replicas": 1}]}) == 1
+    for cfg in ({"replicas": True}, {"replicas": 1.5}, {"replicas": "1.5"}):
+        try:
+            _resolve_db_replicas(cfg)
+        except DeploymentError as exc:
+            assert exc.code == "DATABASE_REPLICA_COUNT_INVALID"
+        else:
+            raise AssertionError(f"Non-integer database replica count was accepted: {cfg!r}")
+
     for cfg in (
         {"replicas": 2},
         {"processes": [{"name": "web", "replicas": 3}]},
