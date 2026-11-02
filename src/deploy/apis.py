@@ -1081,7 +1081,6 @@ class DeployViewSet(ModelViewSet):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
-        cfg = _parse_deploy_config(getattr(deploy, "config", None))
         platform = _resolve_platform(deploy)
         if platform not in DB_PLATFORMS:
             return Response(
@@ -1089,47 +1088,85 @@ class DeployViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Skip empty/null sentinels for password-type keys so a user
-        # editing the deploy via the form (which can't pre-fill passwords
-        # because they're masked in the API response) can leave password
-        # fields empty without overwriting the existing password with "".
-        # For non-password fields (env, port, etc.), an empty value is a
-        # legitimate "clear this" intent, so we still pass it through.
-        PASSWORD_KEYS = {"password", "root_password"}
-        updates = {}
-        for k, v in request.data.items():
-            if k not in MUTABLE_DB_CONFIG_KEYS:
-                continue
-            if k in PASSWORD_KEYS and v in (None, "", "__unchanged__"):
-                # Keep existing password — don't overwrite.
-                continue
-            updates[k] = v
-        if not updates:
+        from services.revisioning import ensure_revision_for_deploy, materialize_revision_config
+
+        # A config edit is a new immutable execution revision. Materialize the
+        # current revision first so masked Secret references are decrypted in
+        # memory and never treated as replacement passwords.
+        try:
+            with transaction.atomic():
+                locked = (
+                    Deploy.objects.select_for_update()
+                    .select_related("service", "revision")
+                    .get(pk=deploy.pk)
+                )
+                service = Service.objects.select_for_update().get(pk=locked.service_id)
+                if service.status in (
+                    SERVICE_STATUS_CHOICES.QUEUED,
+                    SERVICE_STATUS_CHOICES.DEPLOYING,
+                    SERVICE_STATUS_CHOICES.STOPPING,
+                ) or str(locked.status).lower() in {"pending", "running", "rolling_back"}:
+                    return Response(
+                        {"result": "error", "detail": _("Database configuration cannot change while a deployment is active.")},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                cfg = (
+                    materialize_revision_config(locked.revision)
+                    if locked.revision_id
+                    else _parse_deploy_config(getattr(locked, "config", None))
+                )
+
+                # Empty/null password sentinels mean "unchanged" because
+                # secret values are intentionally never pre-filled in forms.
+                # Non-secret empty fields remain explicit clear operations.
+                password_keys = {"password", "root_password"}
+                updates = {}
+                for key, value in request.data.items():
+                    if key not in MUTABLE_DB_CONFIG_KEYS:
+                        continue
+                    if key in password_keys and value in (None, "", "__unchanged__"):
+                        continue
+                    updates[key] = value
+                if not updates:
+                    return Response(
+                        {
+                            "result": "error",
+                            "detail": _(
+                                "No valid fields provided. "
+                                f"Allowed: {', '.join(sorted(MUTABLE_DB_CONFIG_KEYS))}."
+                            ),
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                new_cfg = {**cfg, **updates, "platform": platform}
+                errors = validate_db_config(platform, new_cfg)
+                if errors:
+                    return Response(
+                        {"result": "error", "detail": "; ".join(errors)},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                locked.config = new_cfg
+                locked.save(update_fields=["config"])
+                revision_deploy = ensure_revision_for_deploy(
+                    locked,
+                    force_new=True,
+                )
+                revision_deploy.refresh_from_db(fields=["revision", "config"])
+                revision_id = str(revision_deploy.revision_id or "")
+        except Exception:
+            logger.exception("Failed to create an immutable DB configuration revision for deploy=%s.", deploy.pk)
             return Response(
-                {
-                    "result": "error",
-                    "detail": _(
-                        "No valid fields provided. "
-                        f"Allowed: {', '.join(sorted(MUTABLE_DB_CONFIG_KEYS))}."
-                    ),
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+                {"result": "error", "detail": _("Could not save the database configuration revision.")},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        new_cfg = {**cfg, **updates, "platform": platform}
-        errors = validate_db_config(platform, new_cfg)
-        if errors:
-            return Response(
-                {"result": "error", "detail": "; ".join(errors)},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        deploy.config = new_cfg
-        deploy.save(update_fields=["config"])
         return Response(
             {
                 "result": "success",
-                "detail": _("DB config updated. Call /rebuild/ to apply the new credentials."),
+                "detail": _("Database configuration saved as a new immutable revision. Rebuild the service to apply it."),
+                "revision_id": revision_id,
             },
             status=status.HTTP_200_OK,
         )
