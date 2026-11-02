@@ -365,7 +365,11 @@ def _retry_orphaned_queued_deploys() -> None:
     This makes Redis/Celery outages non-fatal to the API request: the operation
     stays QUEUED/PENDING and is picked up automatically once the broker returns.
     """
-    from deployments.celery.tasks import deploy as app_deploy, run_db_deploy
+    from deployments.celery.tasks import (
+        deploy as app_deploy,
+        run_db_deploy,
+        rollback_deployment,
+    )
     from deployments.core.db_deployer import DB_PLATFORMS
     from deployments.common import parse_config
 
@@ -399,26 +403,96 @@ def _retry_orphaned_queued_deploys() -> None:
             if attempts >= int(policies["max_recovery_attempts"]):
                 logger.error("Recovery limit reached for deployment %s", deploy.pk)
                 continue
+
+            is_rollback = str(getattr(deploy, "operation", "") or "").lower() == "rollback"
+            task_kwargs = {}
+            if is_rollback:
+                expected_generation = int(getattr(service, "lifecycle_generation", 0) or 0)
+                recovery_metadata = dict(getattr(deploy, "recovery_metadata", None) or {})
+                recorded_generation = recovery_metadata.get("expected_lifecycle_generation")
+                if recorded_generation is None or int(recorded_generation) != expected_generation:
+                    logger.warning(
+                        "Not re-queueing stale rollback deployment=%s recorded_generation=%s current_generation=%s",
+                        deploy.pk,
+                        recorded_generation,
+                        expected_generation,
+                    )
+                    continue
+                task = rollback_deployment
+                task_kwargs = {
+                    "expected_lifecycle_generation": expected_generation,
+                    "expected_previous_deploy_id": str(deploy.previous_deploy_id or ""),
+                }
+            else:
+                cfg = parse_config(deploy.config) if isinstance(deploy.config, dict) else {}
+                platform = str(
+                    cfg.get("platform")
+                    or getattr(getattr(service, "plan", None), "platform", "")
+                    or ""
+                ).strip().lower()
+                task = run_db_deploy if platform in DB_PLATFORMS else app_deploy
+
+            # Commit the new owner before publishing the broker message. A fast
+            # worker can therefore never race ahead of the ownership projection.
+            with transaction.atomic():
+                locked = (
+                    Deploy.objects.select_for_update()
+                    .select_related("service")
+                    .filter(pk=deploy.pk)
+                    .first()
+                )
+                if (
+                    locked is None
+                    or locked.status != DeploymentStatusChoices.PENDING
+                    or locked.cancel_requested
+                ):
+                    continue
+                locked_service = Service.objects.select_for_update().filter(
+                    pk=locked.service_id
+                ).first()
+                if (
+                    locked_service is None
+                    or locked_service.status != SERVICE_STATUS_CHOICES.QUEUED
+                ):
+                    continue
+                if is_rollback and (
+                    int(locked_service.lifecycle_generation or 0)
+                    != int(task_kwargs["expected_lifecycle_generation"])
+                ):
+                    continue
+                locked.execution_task_id = str(lock_id)
+                locked.worker_heartbeat_at = None
+                locked.status_message = "Deployment re-queued after temporary broker unavailability."
+                locked.updated_at = timezone.now()
+                locked.save(update_fields=[
+                    "execution_task_id",
+                    "worker_heartbeat_at",
+                    "status_message",
+                    "updated_at",
+                ])
+                locked_service.task_id = str(lock_id)
+                locked_service.save(update_fields=["task_id", "updated_at"])
+
             rr.incr(recovery_key)
             rr.expire(recovery_key, max(3600, int(policies["stale_worker_seconds"]) * 10))
-            cfg = parse_config(deploy.config) if isinstance(deploy.config, dict) else {}
-            platform = str(
-                cfg.get("platform")
-                or getattr(getattr(service, "plan", None), "platform", "")
-                or ""
-            ).strip().lower()
-            task = run_db_deploy if platform in DB_PLATFORMS else app_deploy
-            task.apply_async(args=[str(deploy.id)], task_id=lock_id)
-            Deploy.objects.filter(pk=deploy.pk, status=DeploymentStatusChoices.PENDING).update(
-                status_message="Deployment re-queued after temporary broker unavailability.",
-                execution_task_id=lock_id,
-                worker_heartbeat_at=None,
-                updated_at=timezone.now(),
+            task.apply_async(
+                args=[str(deploy.id)],
+                kwargs=task_kwargs,
+                task_id=lock_id,
+                retry=True,
+                retry_policy={
+                    "max_retries": 5,
+                    "interval_start": 0,
+                    "interval_step": 0.5,
+                    "interval_max": 3,
+                },
             )
-            service.__class__.objects.filter(
-                pk=service.pk, status=SERVICE_STATUS_CHOICES.QUEUED
-            ).update(task_id=lock_id)
-            logger.info("Re-queued orphaned deployment %s with task_id=%s", deploy.pk, lock_id)
+            logger.info(
+                "Re-queued orphaned %s deployment %s with task_id=%s",
+                "rollback" if is_rollback else "normal",
+                deploy.pk,
+                lock_id,
+            )
         except Exception:
             logger.warning(
                 "Unable to re-queue deployment %s; broker may still be unavailable.",
