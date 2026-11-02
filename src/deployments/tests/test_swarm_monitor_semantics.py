@@ -75,25 +75,25 @@ class SwarmMonitorSemanticsTests(unittest.TestCase):
                 self.assertFalse(_swarm_has_terminal_runtime_failure(state))
 
     def test_process_group_requires_all_desired_replicas_for_every_process(self):
-        class Runtime:
-            states = {
-                "app-web": self._state(
-                    tasks=[self._task(state="running"), self._task(state="running")],
-                    replicas_desired=2,
-                    replicas_running=2,
-                ),
-                "app-worker": self._state(
-                    tasks=[self._task(state="running"), self._task(state="starting")],
-                    replicas_desired=2,
-                    replicas_running=1,
-                ),
-            }
+        states = {
+            "app-web": self._state(
+                tasks=[self._task(state="running"), self._task(state="running")],
+                replicas_desired=2,
+                replicas_running=2,
+            ),
+            "app-worker": self._state(
+                tasks=[self._task(state="running"), self._task(state="starting")],
+                replicas_desired=2,
+                replicas_running=1,
+            ),
+        }
 
+        class Runtime:
             def service_names_for_service(self, service_id):
                 return ["app-web", "app-worker"]
 
             def inspect_service(self, name):
-                return self.states[name]
+                return states[name]
 
         service = SimpleNamespace(
             pk="service-1",
