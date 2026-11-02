@@ -1025,6 +1025,18 @@ def restart_service_apiview(request):
                     {"result": "error", "detail": _("Service is busy; try again later.")},
                     status=status.HTTP_409_CONFLICT,
                 )
+            if (
+                service_item.status == SERVICE_STATUS_CHOICES.STOPPED
+                or str(service_item.desired_state or "").lower() == "stopped"
+            ):
+                return Response(
+                    {
+                        "result": "error",
+                        "code": "RESTART_REQUIRES_RUNNING_SERVICE",
+                        "detail": _("A stopped service cannot be restarted. Start it first."),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
 
             from services.lifecycle import bump_lifecycle
             from deployments.core.state.manager import StateManager
