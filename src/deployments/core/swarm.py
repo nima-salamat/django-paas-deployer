@@ -2170,6 +2170,11 @@ class SwarmRuntime:
                 if startup_failure is not None:
                     raise startup_failure
                 log_evidence = task_logs if str(task_logs or "").strip() else service_logs
+                try:
+                    from deploy.event_pipeline import sanitize
+                    safe_log_evidence = sanitize(log_evidence[-4000:])
+                except Exception:
+                    safe_log_evidence = "[log excerpt withheld: sanitization unavailable]"
                 technical = (
                     f"Swarm task failed: {task_detail}; "
                     f"task_id={task.task_id}; node={task.node_name or task.node_id or ''}; "
@@ -2181,7 +2186,7 @@ class SwarmRuntime:
                     f"service_image={latest.service_image!r}; "
                     f"update_state={latest.update_state!r}; "
                     f"update_message={latest.update_message or ''!r}; "
-                    f"task_logs={log_evidence[-4000:]}"
+                    f"task_logs={safe_log_evidence}"
                 )
                 raise DeploymentError(
                     technical,
