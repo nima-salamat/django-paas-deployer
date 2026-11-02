@@ -855,13 +855,49 @@ def _recover_stale_running_deploys_swarm(policies) -> None:
                     continue
                 revision = ensure_revision_for_deploy(locked)
                 current = get_authoritative_deploy(locked.service)
-                if current is not None and current.pk != locked.pk:
+                is_rollback = str(getattr(locked, "operation", "") or "").lower() == "rollback"
+                recovery_metadata = dict(getattr(locked, "recovery_metadata", None) or {})
+                expected_lifecycle_generation = None
+                expected_previous_deploy_id = None
+                expected_active_revision_id = None
+                if is_rollback:
+                    expected_lifecycle_generation = recovery_metadata.get("expected_lifecycle_generation")
+                    expected_previous_deploy_id = str(
+                        recovery_metadata.get("expected_previous_deploy_id")
+                        or locked.previous_deploy_id
+                        or ""
+                    )
+                    expected_active_revision_id = str(
+                        recovery_metadata.get("expected_active_revision_id") or ""
+                    )
+                    if (
+                        expected_lifecycle_generation is None
+                        or int(locked.service.lifecycle_generation or 0) != int(expected_lifecycle_generation)
+                        or str(locked.service.task_id or "") != str(locked.execution_task_id or "")
+                        or str(getattr(current, "pk", "") or "") != expected_previous_deploy_id
+                        or str(locked.service.active_revision_id or "") != expected_active_revision_id
+                    ):
+                        logger.warning(
+                            "Refusing stale rollback recovery for deploy=%s: lifecycle owner or active revision changed.",
+                            locked.pk,
+                        )
+                        continue
+                elif current is not None and current.pk != locked.pk:
                     logger.warning("Refusing stale Swarm recovery for deploy=%s; active deploy=%s", locked.pk, current.pk)
                     continue
                 committed = StateManager.activate_revision_and_succeed(
                     locked.pk,
                     revision.revision_id,
                     task_id=locked.execution_task_id or None,
+                    expected_lifecycle_generation=(
+                        int(expected_lifecycle_generation)
+                        if expected_lifecycle_generation is not None
+                        else None
+                    ),
+                    expected_previous_deploy_id=expected_previous_deploy_id,
+                    enforce_previous_deploy=is_rollback,
+                    expected_active_revision_id=expected_active_revision_id,
+                    allow_active_revision_replacement=is_rollback,
                     update_fields={
                         "stage": "deployment_completed",
                         "progress": 100,
