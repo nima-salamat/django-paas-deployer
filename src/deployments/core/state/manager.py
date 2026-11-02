@@ -1096,18 +1096,9 @@ class StateManager:
                 occurred_at=now,
                 payload=payload,
             )
-            if service.status in (sm.SERVICE_QUEUED, sm.SERVICE_DEPLOYING):
-                try:
-                    sm.check_service_transition(service.status, sm.SERVICE_STOPPED)
-                except sm.InvalidTransition:
-                    pass
-                else:
-                    Service.objects.filter(pk=service.pk).update(
-                        status=sm.SERVICE_STOPPED,
-                        desired_state="stopped",
-                        task_id=None,
-                        deploy_started=None,
-                    )
+            # The cancellation use case owns Service.desired_state and
+            # runtime restoration. Do not force STOPPED here: a replacement
+            # deployment may have a healthy previous release to preserve.
             return False
 
     @classmethod
