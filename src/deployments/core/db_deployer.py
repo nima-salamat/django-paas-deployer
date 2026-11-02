@@ -166,6 +166,24 @@ def _resolve_db_replicas(cfg: dict[str, Any], default: int = 1) -> int:
                 raw = candidate.get("replicas")
     if raw in (None, ""):
         raw = default
+    if isinstance(raw, bool):
+        raise DeploymentError(
+            "Database replicas must be an integer.",
+            stage="swarm_validation",
+            code="DATABASE_REPLICA_COUNT_INVALID",
+        )
+    if isinstance(raw, float) and not raw.is_integer():
+        raise DeploymentError(
+            "Database replicas must be an integer.",
+            stage="swarm_validation",
+            code="DATABASE_REPLICA_COUNT_INVALID",
+        )
+    if isinstance(raw, str) and not re.fullmatch(r"[+-]?\\d+", raw.strip()):
+        raise DeploymentError(
+            "Database replicas must be an integer.",
+            stage="swarm_validation",
+            code="DATABASE_REPLICA_COUNT_INVALID",
+        )
     try:
         replicas = int(raw)
     except (TypeError, ValueError) as exc:
