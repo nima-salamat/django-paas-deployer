@@ -218,7 +218,13 @@ def _apply_explicit_docker_source_process_override(
 class DeployService:
     """Orchestrates deployment execution flows coupled with state logging."""
 
-    def execute(self, deploy_id: int, *, task_id: str | None = None) -> None:
+    def execute(
+        self,
+        deploy_id: int,
+        *,
+        task_id: str | None = None,
+        allow_owned_retry: bool = False,
+    ) -> None:
         # 1. Acquire the per-service advisory lock BEFORE touching the
         #    row state.  This prevents two deploys for the same Service
         #    from racing even if the row-lock transaction boundary is
@@ -240,7 +246,12 @@ class DeployService:
 
         try:
             with acquire_service_deployment_lock(service_id):
-                self._execute_locked(deploy_id, service_id, task_id=task_id)
+                self._execute_locked(
+                    deploy_id,
+                    service_id,
+                    task_id=task_id,
+                    allow_owned_retry=allow_owned_retry,
+                )
         except InvalidServiceStateError as exc:
             logger.info("Skipped deploy execution for ID %s: %s", deploy_id, str(exc))
             return
@@ -256,9 +267,20 @@ class DeployService:
             )
             raise translated from exc
 
-    def _execute_locked(self, deploy_id: int, service_id: int, *, task_id: str | None = None) -> None:
+    def _execute_locked(
+        self,
+        deploy_id: int,
+        service_id: int,
+        *,
+        task_id: str | None = None,
+        allow_owned_retry: bool = False,
+    ) -> None:
         try:
-            deploy_item = ServiceStateManager.lock_and_get_deployment(deploy_id, task_id=task_id)
+            deploy_item = ServiceStateManager.lock_and_get_deployment(
+                deploy_id,
+                task_id=task_id,
+                allow_owned_retry=allow_owned_retry,
+            )
         except InvalidServiceStateError as exc:
             logger.info("Skipped deploy execution for ID %s: %s", deploy_id, str(exc))
             return
