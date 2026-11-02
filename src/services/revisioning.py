@@ -34,6 +34,9 @@ _SENSITIVE_KEY_TOKENS = (
     "signing_key",
     "authorization",
     "credential",
+    "dsn",
+    "database_url",
+    "connection_string",
 )
 
 _SECRET_REFERENCE_RE = re.compile(r"^\$\{secret\.([A-Za-z0-9_]+)\}$")
