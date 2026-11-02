@@ -303,6 +303,48 @@ class DjangoDeploymentState:
         )
         error_user_message = getattr(exception, "user_message", None) or result_details.get("user_message")
 
+        owner = self._owner_task_id or str((current or {}).get("execution_task_id") or "")
+        if (
+            not success
+            and not cancelled_by_operator
+            and bool(error_recoverable)
+        ):
+            retry_message = (
+                error_user_message
+                or result_message
+                or "A temporary deployment failure occurred; retry is pending."
+            )
+            retry_recorded = StateManager.mark_deploy_retry_pending(
+                self.deploy.pk,
+                task_id=owner,
+                message=retry_message,
+                error_message=str(
+                    result_details.get("technical_message")
+                    or result_error
+                    or retry_message
+                ),
+                stage="retry_pending",
+                event_payload={
+                    "trace_id": self.events._trace_id(),
+                    "details": {
+                        **dict(result_details or {}),
+                        "error_code": error_code,
+                        "error_category": error_category,
+                        "recoverable": True,
+                        "retry_pending": True,
+                    },
+                },
+            )
+            # A failed compare-and-set means cancellation or a newer owner
+            # already won. Never emit a second terminal result from this worker.
+            self._finished = True
+            if not retry_recorded:
+                logger.info(
+                    "Recoverable result for deploy=%s was not retained because cancellation or a new owner won.",
+                    self.deploy.pk,
+                )
+            return
+
         update = {
             "completed_at": timezone.now(),
             "progress": 100,
@@ -412,7 +454,6 @@ class DjangoDeploymentState:
         if error_recoverable is not None:
             details["recoverable"] = bool(error_recoverable)
 
-        owner = self._owner_task_id or str((current or {}).get("execution_task_id") or "")
         event_payload = {
             "event_id": str(uuid.uuid4()),
             "trace_id": self.events._trace_id(),
