@@ -746,7 +746,7 @@ def _recover_stale_running_deploys(policies) -> None:
 def _expected_swarm_process_replicas(
     service: Service,
     deploy: Deploy | None = None,
-) -> dict[str, int]:
+) -> dict[str, int] | None:
     """Resolve the process names and replica counts required by the immutable revision.
 
     Swarm's current desired replica count is not the application's desired
@@ -798,15 +798,17 @@ def _expected_swarm_process_replicas(
                     f"Enabled process {process_name!r} has invalid replica count {replicas}."
                 )
             expected[runtime_name] = replicas
+        if not expected:
+            raise ValueError("The immutable revision contains no enabled runtime processes.")
         return expected
     except Exception:
         logger.warning(
             "Could not derive the expected Swarm process graph for service=%s; "
-            "falling back to observed process names without claiming configuration convergence.",
+            "runtime observations cannot prove configuration convergence.",
             service.pk,
             exc_info=True,
         )
-        return {}
+        return None
 
 
 def _swarm_process_group_health(
@@ -832,6 +834,13 @@ def _swarm_process_group_health(
         return False, False, []
 
     expected = _expected_swarm_process_replicas(service, deploy)
+    if expected is None:
+        return False, False, [{
+            "name": service.get_docker_service_name(),
+            "configuration_unknown": True,
+            "ready": False,
+            "terminal_failure": False,
+        }]
     if expected:
         missing_names = sorted(set(expected) - set(names))
         unexpected_names = sorted(set(names) - set(expected))
