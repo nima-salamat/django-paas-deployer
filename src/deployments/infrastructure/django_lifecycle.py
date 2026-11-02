@@ -77,6 +77,47 @@ class DjangoDeploymentLifecycleStore:
                     else ("clean" if cleanup_attempted else "not_required")
                 )
                 updates["cleanup_failures"] = list(details.get("cleanup_failures") or [])
+        if target == sm.DEPLOY_FAILED and bool((details or {}).get("recoverable")):
+            # A recoverable runtime failure is not a terminal deployment
+            # outcome. Keep the same attempt RUNNING and preserve the owner
+            # token so Celery can retry the exact immutable revision safely.
+            from django.db import transaction
+            from django.utils import timezone
+            with transaction.atomic():
+                locked = (
+                    Deploy.objects.select_for_update()
+                    .filter(pk=self.deployment_id)
+                    .first()
+                )
+                if (
+                    locked is None
+                    or sm.is_deploy_terminal(locked.status)
+                    or (
+                        self.task_id
+                        and str(locked.execution_task_id or "") != str(self.task_id)
+                    )
+                ):
+                    return False
+                if locked.cancel_requested:
+                    return StateManager.transition_deploy_terminal_if_owned(
+                        self.deployment_id,
+                        sm.DEPLOY_CANCELLED,
+                        task_id=self.task_id or context.worker_task_id,
+                        update_fields={
+                            "stage": "cancelled",
+                            "status_message": "Deployment cancellation was requested.",
+                            "error_message": "",
+                        },
+                    )
+                Deploy.objects.filter(pk=self.deployment_id).update(
+                    stage="retry_pending",
+                    status_message=(message or "A temporary deployment failure occurred; retry is pending.")[:500],
+                    error_message=str((details or {}).get("technical_message") or (details or {}).get("error_message") or message)[:1000],
+                    worker_heartbeat_at=timezone.now(),
+                    updated_at=timezone.now(),
+                )
+                return True
+
         terminal = sm.is_deploy_terminal(target)
         if target == sm.DEPLOY_SUCCEEDED:
             event_payload = {
