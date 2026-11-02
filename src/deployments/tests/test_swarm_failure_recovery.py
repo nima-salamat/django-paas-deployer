@@ -232,7 +232,7 @@ class SwarmFailureRecoveryTests(unittest.TestCase):
             "Condition": "on-failure"
         }
         service.tasks = MagicMock(
-            side_effect=[[failed_task] for _ in range(9)] + [[replacement_task]]
+            side_effect=[[failed_task] for _ in range(9)] + [[failed_task, replacement_task]]
         )
         runtime = SwarmRuntime(FakeClient(service))
 
@@ -254,7 +254,7 @@ class SwarmFailureRecoveryTests(unittest.TestCase):
             )
 
         self.assertEqual(state.replicas_running, 1)
-        self.assertEqual(state.tasks[0].task_id, "task-replacement")
+        self.assertEqual(state.tasks[1].task_id, "task-replacement")
         self.assertEqual(service.tasks.call_count, 10)
 
     def test_restartable_failed_task_can_remain_in_backoff(self):

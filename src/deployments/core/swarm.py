@@ -2097,7 +2097,7 @@ class SwarmRuntime:
                 task for task in latest.tasks
                 if task.state.lower() in {"failed", "rejected"}
             ]
-            if failed and not restartable_backoff:
+            if failed and not restartable_failure:
                 task = max(
                     failed,
                     key=lambda item: str(item.status_timestamp or ""),
