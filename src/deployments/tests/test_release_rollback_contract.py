@@ -57,3 +57,29 @@ def test_rollback_resolves_current_promoted_release_for_revisions_reused_by_roll
     assert 'status="promoted"' in api
     assert 'revision_id=current_deploy.revision_id' in worker
     assert 'status="promoted"' in worker
+
+
+def test_native_plan_prefers_current_promoted_release_but_accepts_prepared_rollback_target():
+    scheduler = (ROOT / "deployments/celery/schedules.py").read_text(encoding="utf-8")
+    plan = scheduler.split("def _native_reconciliation_plan", 1)[1].split(
+        "def _service_has_active_native_deployment", 1
+    )[0]
+
+    promoted_lookup = plan.index('status="promoted"')
+    explicit_fallback = plan.index("explicit_release = getattr(deploy, \"release_reference\", None)")
+    rollback_check = plan.index('is_rollback_attempt = str(getattr(deploy, "operation", "") or "").lower() == "rollback"')
+    assert promoted_lookup < explicit_fallback < rollback_check
+    assert 'explicit_status == "promoted"' in plan
+    assert '(is_rollback_attempt and explicit_status == "ready")' in plan
+    assert "retired historical FK" in plan
+
+
+def test_service_runtime_reconciliation_repairs_worker_process_drift():
+    scheduler = (ROOT / "deployments/celery/schedules.py").read_text(encoding="utf-8")
+    reconcile = scheduler.split("def _reconcile_service_runtime_swarm", 1)[1].split(
+        "def _native_reconciliation_plan", 1
+    )[0]
+
+    assert "_swarm_process_group_health(" in reconcile
+    assert "RuntimeObservedStatus.DEGRADED" in reconcile
+    assert "ReconciliationPlanner().decide(desired, observed, selection)" in reconcile
