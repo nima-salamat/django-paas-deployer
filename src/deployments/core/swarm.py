@@ -3431,8 +3431,17 @@ class SwarmRuntime:
 
     def restart_service_group(self, service_id: str, *, timeout: float = 60.0) -> dict[str, SwarmServiceState]:
         """Restart every managed process service for one application in order."""
+        names = self.service_names_for_service(service_id)
+        if not names:
+            raise DeploymentError(
+                f"No managed Swarm process services were found for service {service_id!r}.",
+                stage="swarm_restart",
+                code="SWARM_SERVICE_GROUP_NOT_FOUND",
+                user_message="The service has no managed Swarm runtime to restart.",
+                details={"service_id": str(service_id)},
+            )
         states: dict[str, SwarmServiceState] = {}
-        for name in self.service_names_for_service(service_id):
+        for name in names:
             current = self.inspect_service(name)
             target_replicas = max(1, int(current.replicas_desired or 1)) if current is not None else 1
             self.stop(name)
