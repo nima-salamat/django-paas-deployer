@@ -224,3 +224,40 @@ def test_deploy_result_preserves_explicit_deadline():
 
     assert orchestrator.call_args.kwargs["deadline"] is deadline
 
+def test_runtime_spec_redacts_inline_secrets_from_process_commands():
+    graph = type("Graph", (), {
+        "processes": (type("Process", (), {
+            "name": "worker",
+            "command": "celery -A app worker --token super-secret-value --password=other-secret",
+            "entrypoint": None,
+        })(),)
+    })()
+    plan = type("Plan", (), {
+        "process_graph": graph,
+        "environment": {"API_TOKEN": "super-secret-value", "DB_PASSWORD": "other-secret"},
+        "secret_references": ("API_TOKEN", "DB_PASSWORD"),
+        "runtime_options": {"processes": [{"command": "worker --token super-secret-value"}]},
+        "image_ref": "demo:1", "artifact_digest": "",
+        "identity": type("Identity", (), {"revision_id": "rev1"})(),
+        "labels": {}, "networks": (), "volumes": (), "endpoints": (),
+        "resources": {}, "health_policy": {},
+    })()
+    payload = RuntimeSpec.from_plan(plan).as_dict()
+    encoded = str(payload)
+    assert "super-secret-value" not in encoded
+    assert "other-secret" not in encoded
+    assert "[SECRET_REF]" in encoded
+
+def test_runtime_resource_journal_has_transactional_fencing():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "infrastructure"
+        / "django_lifecycle.py"
+    ).read_text(encoding="utf-8")
+    assert "Deploy.objects.select_for_update()" in source
+    assert "Service.objects.select_for_update()" in source
+    assert "deploy.execution_task_id" in source
+    assert "service.task_id" in source
+

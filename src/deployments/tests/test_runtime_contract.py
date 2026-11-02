@@ -447,3 +447,52 @@ def test_start_reconciles_legacy_failed_projection_when_swarm_is_still_running()
     assert "(SERVICE_STOPPED, SERVICE_RUNNING)" not in state_machine
     assert "allow_runtime_reconciliation=True" in start
     assert "The service is already running." in start
+
+def test_swarm_adapter_readiness_uses_each_process_execution_contract():
+    from dataclasses import replace
+    from deployments.runtime.execution_contract import RuntimeExecutionContract
+
+    class RecordingRuntime(_StubSwarmRuntime):
+        def __init__(self):
+            super().__init__()
+            self.wait_ready_calls = []
+
+        def apply_processes(self, config, *, image_ref, operation_key=None, cancel_check=None, prepared_image_ref=None):
+            return {
+                "web": replace(self.state, name="app-service-1"),
+                "worker": replace(self.state, name="app-service-1-worker"),
+            }
+
+        def wait_ready(self, name, *, timeout, expected_image=None, expected_runtime_contract=None, cancel_check=None, provenance=None):
+            self.wait_ready_calls.append(
+                (name, expected_runtime_contract.process_name if expected_runtime_contract else None)
+            )
+            return self.state
+
+    web = RuntimeExecutionContract(process_name="web", args=("gunicorn", "app.wsgi"))
+    worker = RuntimeExecutionContract(process_name="worker", args=("celery", "-A", "app", "worker"))
+    runtime = RecordingRuntime()
+    adapter = SwarmRuntimeAdapter(runtime=runtime, operator_enabled=True)
+    identity = RuntimeIdentity(
+        service_id="service-1", deployment_id="deployment-1", runtime_name="app-service-1"
+    )
+    plan = SimpleNamespace(
+        identity=identity, image_ref="demo:r1",
+        execution_contracts={"web": web, "worker": worker},
+        process_graph=SimpleNamespace(
+            processes=(
+                SimpleNamespace(name="web", command="gunicorn app.wsgi", entrypoint=None),
+                SimpleNamespace(name="worker", command="celery -A app worker", entrypoint=None),
+            ), runtime={}, build={}
+        ),
+        runtime_options={}, environment={}, resources={}, networks=(), volumes=(),
+        endpoints=(), labels={}, release_id=None, health_policy={},
+    )
+    result = adapter.apply(plan, operation_key="deployment-1/apply")
+    adapter.wait_ready(result.handle, timeout=5)
+
+    assert runtime.wait_ready_calls == [
+        ("app-service-1", "web"),
+        ("app-service-1-worker", "worker"),
+    ]
+

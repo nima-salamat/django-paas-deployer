@@ -12,8 +12,10 @@ EventSink = Callable[["DeploymentEvent"], None]
 class NetworkSpec:
     name: str
     driver: str = "bridge"
-    internal: bool = True
+    internal: bool | None = None
     attachable: bool = True
+    aliases: tuple[str, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -46,6 +46,8 @@ from deployments.core.db_deployer import (
 from deployments.common import parse_config, as_bool
 from deployments.common.exceptions import (
     DeploymentError,
+    DeploymentCancelled,
+    StaleDeploymentWorkerError,
     InvalidServiceStateError,
     DeploymentValidationError,
     ContainerTimeoutError,
@@ -900,6 +902,9 @@ def _collect_service_volumes(service: Service) -> list[dict]:
     seen: set[str] = set()
 
     def _add(vol) -> None:
+        is_mounted = getattr(vol, "is_mounted_on_service", None)
+        if callable(is_mounted) and not is_mounted(service):
+            return
         # Prefer the Docker volume name (vol-{id}-{name}), matching
         # deploy_service / signals.  Fall back to the human name only if
         # the helper is missing.
@@ -1000,17 +1005,18 @@ def _ensure_default_db_volume(platform: str, service: Service) -> dict | None:
 
     from services.models import Volume
 
-    existing = Volume.objects.filter(service_id=service.pk).order_by("created_at").first()
+    existing = None
+    for candidate in Volume.objects.filter(service_id=service.pk).order_by("created_at"):
+        if not candidate.is_mounted_on_service(service):
+            continue
+        if str(candidate.get_bind_for_service(service) or "").rstrip("/") == default_bind.rstrip("/"):
+            existing = candidate
+            break
     if existing is not None:
         return {
             "source": existing.get_docker_volume_name(),
-            "target": (
-                (existing.service_attachments or {}).get(str(service.pk), {}).get("bind")
-                or existing.default_bind
-                or default_bind
-            ),
-            "mode": (existing.service_attachments or {}).get(str(service.pk), {}).get("mode")
-            or existing.default_mode or "rw",
+            "target": existing.get_bind_for_service(service),
+            "mode": existing.get_mode_for_service(service) or "rw",
         }
 
     ok, msg = service.can_allocate_storage(default_size_mb)
@@ -1037,9 +1043,8 @@ def _ensure_default_db_volume(platform: str, service: Service) -> dict | None:
                 },
             )
 
-    base = getattr(service, "get_docker_service_name", lambda: "")() or f"svc-{service.pk}"
-    base_clean = "".join(c if c.isalnum() else "-" for c in str(base)).strip("-") or f"svc-{service.pk}"
-    name = (base_clean[:24] + "-data")[:32]
+    service_token = str(getattr(service, "pk", "")).replace("-", "").lower()[:10]
+    name = f"db-{service_token}-data"[:32]
     try:
         volume = Volume.objects.create(
             name=name,
@@ -1169,16 +1174,19 @@ def _build_db_cfg(deploy: Deploy, service: Service) -> dict[str, Any]:
         if vols:
             cfg["volumes"] = vols
 
-    # ------------------------------------------------------------------
-    # Auto-volume safety net — if the service has NO Volume attached in
-    # the Django registry, create one now so DB data persists across
-    # rebuilds instead of being lost to an anonymous Docker volume.
-    # See ``_ensure_default_db_volume`` for the full rationale.
-    # ------------------------------------------------------------------
-    if not cfg.get("volumes") and platform in _DB_DEFAULT_DATA_PATHS:
+    if platform in _DB_DEFAULT_DATA_PATHS:
         auto_vol = _ensure_default_db_volume(platform, service)
         if auto_vol:
-            cfg["volumes"] = [auto_vol]
+            volumes = list(cfg.get("volumes") or [])
+            data_target = str(auto_vol.get("target") or "").rstrip("/")
+            already_mounted = any(
+                isinstance(item, dict)
+                and str(item.get("target") or item.get("bind") or "").rstrip("/") == data_target
+                for item in volumes
+            )
+            if not already_mounted:
+                volumes.append(auto_vol)
+            cfg["volumes"] = volumes
 
     return cfg
 
@@ -1569,6 +1577,23 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
     # the row but before completing Docker work).
     try:
         with acquire_service_deployment_lock(service.pk):
+            def ownership_check() -> bool:
+                return StateManager.heartbeat_deploy(
+                    deploy.pk,
+                    task_id=str(self.request.id),
+                    stage="database",
+                )
+
+            def cancel_check() -> bool:
+                current = Deploy.objects.filter(pk=deploy.pk).values(
+                    "cancel_requested", "status"
+                ).first()
+                return bool(
+                    current is None
+                    or current["cancel_requested"]
+                    or current["status"] == DeploymentStatusChoices.CANCELLED
+                )
+
             result = DBDeployer().deploy(
                 container_name=container_name,
                 platform=platform,
@@ -1577,7 +1602,25 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
                 deployment_id=str(deploy.pk),
                 service_id=str(service.pk),
                 force_reinit=force_reinit,
+                cancel_check=cancel_check,
+                ownership_check=ownership_check,
             )
+    except StaleDeploymentWorkerError:
+        logger.warning(
+            "DB deployment worker lost ownership; refusing terminal mutation for deploy=%s.",
+            deploy.pk,
+        )
+        return
+    except DeploymentCancelled as exc:
+        _mark_failure(
+            deploy,
+            service,
+            str(exc) or "Database deployment was cancelled.",
+            stage="cancelled",
+            details=dict(getattr(exc, "details", {}) or {}),
+            task_id=str(self.request.id),
+        )
+        return
     except Exception as exc:
         tb = traceback.format_exc()
         logger.exception(

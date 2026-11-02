@@ -230,7 +230,7 @@ def scale_service_process(service: Service, process_name: str, replicas: int, *,
         from deployments.core.swarm import SwarmRuntime, swarm_enabled
         if not swarm_enabled():
             raise ValueError("Runtime scaling requires the Docker Swarm backend.")
-        SwarmRuntime().scale_service(docker_name, replicas)
+        SwarmRuntime().scale_service(docker_name, replicas, service_id=str(locked.pk))
     except Exception:
         ServiceRevision.objects.filter(pk=revision.pk, state=ServiceRevision.State.CREATED).update(
             state=ServiceRevision.State.FAILED, updated_at=timezone.now()
@@ -246,7 +246,7 @@ def scale_service_process(service: Service, process_name: str, replicas: int, *,
                     state=ServiceRevision.State.FAILED, updated_at=timezone.now()
                 )
                 try:
-                    SwarmRuntime().scale_service(docker_name, current)
+                    SwarmRuntime().scale_service(docker_name, current, service_id=str(locked.pk))
                 except Exception:
                     pass
                 raise ValueError("The service changed while scaling was in progress; the runtime change was reverted.")
@@ -825,13 +825,26 @@ def ensure_revision_for_deploy(deploy, *, force_new: bool = False):
         if row.is_mounted_on_service(service)
     ]
 
-    networks = []
+    networks_by_name = {}
     if service.network_id:
-        networks.append(service.network.get_docker_network_name())
+        docker_name = service.network.get_docker_network_name()
+        networks_by_name[docker_name] = {
+            "name": docker_name, "driver": "overlay", "internal": None,
+            "aliases": [], "metadata": {}, "primary": True,
+        }
     for attachment in service.network_attachments.select_related("network").all():
         docker_name = attachment.network.get_docker_network_name()
-        if docker_name not in networks:
-            networks.append(docker_name)
+        item = networks_by_name.setdefault(docker_name, {
+            "name": docker_name, "driver": "overlay",
+            "internal": bool(attachment.internal), "aliases": [],
+            "metadata": {}, "primary": False,
+        })
+        item["internal"] = bool(attachment.internal)
+        alias = str(attachment.alias or "").strip()
+        if alias and alias not in item["aliases"]:
+            item["aliases"].append(alias)
+        item["metadata"] = dict(attachment.metadata or {})
+    networks = list(networks_by_name.values())
 
     safe_snapshot = compiled
     redacted_snapshot, secret_keys = redact_config(safe_snapshot)

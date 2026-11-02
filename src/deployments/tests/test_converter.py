@@ -81,6 +81,15 @@ class TestConvertZipToTar(unittest.TestCase):
             self.assertEqual(member.mode & 0o111, 0)
 
 
+    def test_large_member_is_streamed_without_reading_whole_file(self):
+        zip_bytes = _make_zip({"large.bin": b"x" * (2 * 1024 * 1024)})
+        tar_stream = self._write_and_convert(zip_bytes)
+        tar_stream.seek(0)
+        with tarfile.open(fileobj=tar_stream, mode="r") as tf:
+            member = tf.getmember("large.bin")
+            self.assertEqual(member.size, 2 * 1024 * 1024)
+            with tf.extractfile(member) as stream:
+                self.assertEqual(stream.read(8), b"x" * 8)
 class TestMergeTarStreams(unittest.TestCase):
 
     def test_merges_two_tars(self):

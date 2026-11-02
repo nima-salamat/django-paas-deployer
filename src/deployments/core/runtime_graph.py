@@ -275,7 +275,10 @@ class ServiceRuntimeGraph:
             processes=tuple(process_rows),
             endpoints=tuple(endpoint_rows),
             volumes=tuple(dict(v) for v in (getattr(revision, "volume_snapshot", None) or [])),
-            networks=tuple(str(n) for n in (getattr(revision, "network_snapshot", None) or [])),
+            networks=tuple(
+                dict(n) if isinstance(n, Mapping) else {"name": str(n)}
+                for n in (getattr(revision, "network_snapshot", None) or [])
+            ),
             metadata={
                 "revision_id": str(revision_id or ""),
                 "revision": revision_number,

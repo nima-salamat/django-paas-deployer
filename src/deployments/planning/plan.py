@@ -266,21 +266,40 @@ class DeploymentPlanCompiler:
         )
 
     @staticmethod
-    def _networks(raw: Any, graph_networks: tuple[str, ...], config: Any) -> list[NetworkSpec]:
-        values = raw or graph_networks
+    def _networks(raw: Any, graph_networks: tuple[Any, ...], config: Any) -> list[NetworkSpec]:
+        values = list(graph_networks or ()) + list(raw or ())
         if not values:
             return list(getattr(config, "networks", ()) or ())
         existing = {
             str(network.name): network
             for network in (getattr(config, "networks", ()) or ())
         }
-        result = []
+        result: list[NetworkSpec] = []
+        seen: set[str] = set()
         for value in values:
             if isinstance(value, NetworkSpec):
-                result.append(value)
+                network = value
+            elif isinstance(value, Mapping):
+                name = str(value.get("name") or value.get("network") or "").strip()
+                if not name:
+                    continue
+                aliases = value.get("aliases") or ([value.get("alias")] if value.get("alias") else [])
+                network = NetworkSpec(
+                    name=name,
+                    driver=str(value.get("driver") or "overlay"),
+                    internal=value.get("internal"),
+                    aliases=tuple(dict.fromkeys(str(item).strip() for item in aliases if str(item).strip())),
+                    metadata=dict(value.get("metadata") or {}),
+                )
             else:
-                name = str(value.get("name") if isinstance(value, Mapping) else value)
-                result.append(existing.get(name) or NetworkSpec(name=name, driver="overlay"))
+                name = str(value).strip()
+                if not name:
+                    continue
+                network = existing.get(name) or NetworkSpec(name=name, driver="overlay")
+            if network.name in seen:
+                continue
+            seen.add(network.name)
+            result.append(network)
         return result
 
     @staticmethod

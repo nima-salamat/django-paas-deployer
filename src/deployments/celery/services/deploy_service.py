@@ -2307,8 +2307,10 @@ class DeployService:
         existing = list(cls._get_volumes_for_service(service))
         existing_binds = set()
         for vol in existing:
+            if not vol.is_mounted_on_service(service):
+                continue
             att = (vol.service_attachments or {}).get(str(service.id)) or {}
-            bind = att.get("bind") or getattr(vol, "default_bind", "") or ""
+            bind = att.get("bind") or ""
             if bind:
                 existing_binds.add(bind.rstrip("/"))
 
@@ -2395,7 +2397,7 @@ class DeployService:
             if not target:
                 continue
             existing = service.volumes.filter(default_bind=target).order_by("created_at").first()
-            if existing is not None:
+            if existing is not None and existing.is_mounted_on_service(service):
                 continue
             safe_name = re.sub(r"[^a-z0-9_.-]+", "-", compose_name.lower()).strip("-") or "data"
             volume_name = f"dv-{service.id.hex[:8]}-{safe_name}"[:32]
@@ -2481,6 +2483,8 @@ class DeployService:
 
         specs = []
         for volume in DeployService._get_volumes_for_service(service):
+            if not volume.is_mounted_on_service(service):
+                continue
             attachments = getattr(volume, "service_attachments", None) or {}
             if not isinstance(attachments, dict):
                 attachments = {}

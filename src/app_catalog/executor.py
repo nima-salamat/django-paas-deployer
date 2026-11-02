@@ -140,6 +140,7 @@ class ApplicationStackExecutor:
                             from deployments.core.swarm import SwarmRuntime
                             SwarmRuntime().reconcile_public_routing(
                                 service_name=service.get_docker_service_name(),
+                                service_id=str(service.pk),
                                 endpoints=service.endpoints.filter(
                                     enabled=True,
                                     exposure="public",
@@ -246,6 +247,7 @@ class ApplicationStackExecutor:
                     from deployments.core.swarm import SwarmRuntime
                     SwarmRuntime().reconcile_public_routing(
                         service_name=service.get_docker_service_name(),
+                        service_id=str(service.pk),
                         endpoints=service.endpoints.filter(
                             enabled=True,
                             exposure="public",

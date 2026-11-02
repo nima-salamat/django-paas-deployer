@@ -96,11 +96,16 @@ def convert_zip_to_tar(zip_path: str) -> io.BytesIO:
                         details={"max_bytes": MAX_ARCHIVE_BYTES},
                     )
 
-                file_data = zipf.read(zip_info.filename)
                 tar_info = tarfile.TarInfo(name=member_name)
-                tar_info.size = len(file_data)
+                tar_info.size = int(zip_info.file_size)
                 tar_info.mode = 0o644
-                tar.addfile(tar_info, io.BytesIO(file_data))
+                # ZipExtFile is a streaming file object. tarfile.addfile reads
+                # exactly TarInfo.size bytes, avoiding a second per-file bytes
+                # allocation for large (up to 500 MiB) archive members.
+                with zipf.open(zip_info, "r") as file_data:
+                    tar.addfile(tar_info, file_data)
 
     tar_stream.seek(0)
-    return merge_tar_streams(tar_stream)
+    # The tar is already complete; merge_tar_streams would duplicate the
+    # entire archive in memory without changing its contents.
+    return tar_stream

@@ -167,3 +167,27 @@ def test_db_misroute_preserves_original_celery_owner_and_plan_authority():
     assert 'run_db_deploy.apply(' in source
     assert 'task_id=str(self.request.id)' in source
     assert 'run_db_deploy.delay(str(deploy_id))' not in source
+
+def test_db_default_volume_is_created_for_data_directory_when_side_volume_exists():
+    from deployments.celery.tasks import _ensure_default_db_volume
+    from unittest.mock import MagicMock, patch
+
+    service = MagicMock()
+    service.pk = "12345678-1234-1234-1234-123456789abc"
+    service.id = type("UUID", (), {"hex": "12345678123412341234123456789abc"})()
+    service.user = object()
+    service.can_allocate_storage.return_value = (True, "")
+    side = MagicMock()
+    side.is_mounted_on_service.return_value = True
+    side.get_bind_for_service.return_value = "/backups"
+    manager = MagicMock()
+    manager.filter.return_value.order_by.return_value = [side]
+    created = MagicMock()
+    created.get_docker_volume_name.return_value = "vol-data"
+    with patch("services.models.Volume.objects", manager):
+        manager.create.return_value = created
+        result = _ensure_default_db_volume("postgresql", service)
+
+    assert result["target"] == "/var/lib/postgresql/data"
+    assert manager.create.call_args.kwargs["default_bind"] == "/var/lib/postgresql/data"
+

@@ -413,6 +413,12 @@ class SwarmRuntimeAdapter:
             ) from exc
         observation = self._observation(identity, state, assume_identity_revision=True)
         recovery = dict(getattr(self.runtime, "_last_apply_recovery", {}) or {})
+        execution_contracts_by_service = {}
+        for process_name, runtime_state in states.items():
+            service_name = str(getattr(runtime_state, "name", "") or "")
+            process_contract = execution_contracts.get(str(process_name))
+            if service_name and process_contract is not None:
+                execution_contracts_by_service[service_name] = process_contract.as_dict()
         handle = RuntimeHandle(
             backend=self.backend,
             identity=identity,
@@ -420,6 +426,7 @@ class SwarmRuntimeAdapter:
             resource_name=identity.resource_name(),
             metadata={
                 "service_names": process_names,
+                "execution_contracts_by_service": execution_contracts_by_service,
                 "service_ids": {
                     str(name): str(getattr(result, "service_id", "") or "")
                     for name, result in states.items()
@@ -643,7 +650,10 @@ class SwarmRuntimeAdapter:
                     "timeout": remaining,
                     "expected_image": expected_image,
                 }
-                contract_value = handle.metadata.get("execution_contract")
+                contract_value = (
+                    dict(handle.metadata.get("execution_contracts_by_service") or {}).get(service_name)
+                    or handle.metadata.get("execution_contract")
+                )
                 if contract_value:
                     wait_ready_kwargs["expected_runtime_contract"] = RuntimeExecutionContract.from_dict(contract_value)
                 provenance = handle.metadata.get("deployment_provenance")

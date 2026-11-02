@@ -151,11 +151,11 @@ class BuildSlot(AbstractContextManager):
                 )
             return False
         except Exception:
-            # A transient Redis error is retried by the heartbeat loop. Only a
-            # confirmed token mismatch is treated as lost ownership.
+            self._lease_lost = True
             if self.logger:
-                self.logger.warning(
-                    "build_slot_renew_failed: Redis heartbeat failed; retrying"
+                self.logger.error(
+                    "build_slot_renew_failed: Redis ownership could not be confirmed; aborting build",
+                    exc_info=True,
                 )
             return False
 

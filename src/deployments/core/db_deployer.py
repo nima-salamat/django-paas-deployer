@@ -45,13 +45,14 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import docker
 from docker.errors import APIError, NotFound
 
 from core.global_settings.config import MIRROR_DOCKER
 from deployments.common.retry import classify_docker_exception
+from deployments.common.exceptions import DeploymentCancelled, StaleDeploymentWorkerError
 from deployments.core.exceptions import DeploymentError
 from deployments.core.manager.client_manager import Client
 from deployments.core.manager.volume_manager import Volume as DockerVolume
@@ -60,6 +61,27 @@ from deployments.common.security import validate_bind_source, validate_docker_na
 
 
 logger = logging.getLogger(__name__)
+
+
+def _db_execution_checkpoint(
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+    ownership_check: Callable[[], bool] | None = None,
+    stage: str = "database",
+) -> None:
+    """Enforce cancellation and worker fencing at database lifecycle boundaries."""
+    if ownership_check is not None and not ownership_check():
+        raise StaleDeploymentWorkerError(
+            "Database deployment execution ownership was lost.",
+            stage=stage,
+            details={"stage": stage, "ownership_lost": True},
+        )
+    if cancel_check is not None and cancel_check():
+        raise DeploymentCancelled(
+            "Database deployment was cancelled.",
+            stage="cancelled",
+            details={"stage": stage},
+        )
 
 
 # ============================================================================
@@ -636,6 +658,8 @@ def _mysql_wait_until_ready(
     *,
     root_password: str = "",
     platform: str = "mysql",
+    cancel_check: Callable[[], bool] | None = None,
+    ownership_check: Callable[[], bool] | None = None,
 ) -> tuple[bool, str]:
     """
     Wait until the OFFICIAL MySQL Docker entrypoint has completely
@@ -671,6 +695,11 @@ def _mysql_wait_until_ready(
     root_password = _clean(root_password)
 
     while time.monotonic() < deadline:
+        _db_execution_checkpoint(
+            cancel_check=cancel_check,
+            ownership_check=ownership_check,
+            stage="mysql_readiness",
+        )
 
         try:
             container = client.containers.get(
@@ -1548,6 +1577,8 @@ class DBDeployer:
         deployment_id: str | None,
         log,
         registry_volume_rows: dict[str, Any],
+        cancel_check: Callable[[], bool] | None = None,
+        ownership_check: Callable[[], bool] | None = None,
     ) -> DBDeployResult:
         runtime = SwarmRuntime()
         replicas = _resolve_db_replicas(cfg)
@@ -1576,7 +1607,103 @@ class DBDeployer:
         if application_service:
             labels["application.service"] = application_service
 
+        # Runtime mutation must be recoverable if database-specific readiness
+        # or credential reconciliation fails after the Swarm service was changed.
+        # Capture whether a previous managed service existed before mutation so
+        # cleanup never deletes a healthy pre-existing DB runtime.
+        try:
+            observed_runtime = runtime.inspect_service(container_name)
+            preexisting_runtime = observed_runtime is not None
+            if preexisting_runtime:
+                observed_labels = dict(getattr(observed_runtime, "labels", {}) or {})
+                if (
+                    observed_labels.get("managed-by") != "django-paas-deployer"
+                    or str(observed_labels.get("passdeployer.service") or "") != str(service_id)
+                ):
+                    return DBDeployResult(
+                        success=False,
+                        message="Refusing to replace an existing Swarm service that cannot be proven to belong to this database Service.",
+                        container_name=container_name,
+                        platform=platform,
+                        error="swarm_resource_ownership_unknown",
+                        details={"service_id": str(service_id), "runtime_labels": observed_labels, "ownership_verified": False},
+                    )
+        except DeploymentError as exc:
+            log.error("swarm_inspection", str(exc), progress=100)
+            return DBDeployResult(
+                success=False,
+                message=getattr(exc, "user_message", None) or str(exc),
+                container_name=container_name,
+                platform=platform,
+                error=str(exc),
+                details=getattr(exc, "details", {}) or {},
+            )
+
+        def recover_runtime(reason: str) -> dict[str, Any]:
+            details: dict[str, Any] = {
+                "runtime_recovery_attempted": True,
+                "runtime_preexisting": preexisting_runtime,
+                "runtime_recovery_reason": reason,
+            }
+            try:
+                if preexisting_runtime:
+                    rolled_back = bool(runtime.rollback_service(container_name, service_id=str(service_id)))
+                    details["runtime_rolled_back"] = rolled_back
+                    details["runtime_removed"] = False
+                else:
+                    runtime.remove(container_name, service_id=str(service_id))
+                    details["runtime_rolled_back"] = False
+                    details["runtime_removed"] = True
+            except Exception as recovery_exc:
+                details["runtime_recovery_failed"] = True
+                details["runtime_recovery_error"] = str(recovery_exc)
+            return details
+
+        def checkpoint(stage: str) -> None:
+            try:
+                _db_execution_checkpoint(
+                    cancel_check=cancel_check,
+                    ownership_check=ownership_check,
+                    stage=stage,
+                )
+            except DeploymentCancelled as exc:
+                recovery = recover_runtime(f"cancelled:{stage}") if runtime_mutated else {}
+                exc.details = {**dict(exc.details or {}), **recovery}
+                raise
+            except StaleDeploymentWorkerError:
+                # Losing the fencing token forbids further runtime mutation.
+                raise
+
+        runtime_mutated = False
+        checkpoint("database_before_apply")
+
         if force_reinit:
+            # Never remove a node-local database volume while a Swarm task may
+            # still hold it. Drain the owned process group before destructive I/O.
+            if preexisting_runtime:
+                try:
+                    drained = runtime.drain_service_group(
+                        str(service_id), timeout=float(cfg.get("stop_timeout") or 60)
+                    )
+                except DeploymentError as exc:
+                    return DBDeployResult(
+                        success=False,
+                        message=f"Database runtime could not be safely drained before force reinitialization: {exc}",
+                        container_name=container_name,
+                        platform=platform,
+                        error=str(exc),
+                        details={"force_reinit": True, "volume_wipe_skipped": True},
+                    )
+                if not drained:
+                    return DBDeployResult(
+                        success=False,
+                        message="Database tasks did not stop; persistent volumes were not wiped.",
+                        container_name=container_name,
+                        platform=platform,
+                        error="database_task_drain_timeout",
+                        details={"force_reinit": True, "volume_wipe_skipped": True},
+                    )
+            checkpoint("database_before_force_reinit")
             for source in list(volume_binds):
                 if str(source).startswith("/"):
                     continue
@@ -1587,12 +1714,14 @@ class DBDeployer:
                         size_mb=int(registry_row.size_mb),
                         driver="local",
                         require_managed=True,
+                        service_id=str(service_id),
                     ).remove()
                     DockerVolume(
                         name=str(source),
                         size_mb=int(registry_row.size_mb),
                         driver="local",
                         require_managed=False,
+                        service_id=str(service_id),
                     ).ensure()
                     log.info(
                         "volume_creation",
@@ -1613,44 +1742,8 @@ class DBDeployer:
                         error=str(exc),
                     )
 
-        # Runtime mutation must be recoverable if database-specific readiness
-        # or credential reconciliation fails after the Swarm service was changed.
-        # Capture whether a previous managed service existed before mutation so
-        # cleanup never deletes a healthy pre-existing DB runtime.
         try:
-            preexisting_runtime = runtime.inspect_service(container_name) is not None
-        except DeploymentError as exc:
-            log.error("swarm_inspection", str(exc), progress=100)
-            return DBDeployResult(
-                success=False,
-                message=getattr(exc, "user_message", None) or str(exc),
-                container_name=container_name,
-                platform=platform,
-                error=str(exc),
-                details=getattr(exc, "details", {}) or {},
-            )
-
-        def recover_runtime(reason: str) -> dict[str, Any]:
-            details: dict[str, Any] = {
-                "runtime_recovery_attempted": True,
-                "runtime_preexisting": preexisting_runtime,
-                "runtime_recovery_reason": reason,
-            }
-            try:
-                if preexisting_runtime:
-                    rolled_back = bool(runtime.rollback_service(container_name))
-                    details["runtime_rolled_back"] = rolled_back
-                    details["runtime_removed"] = False
-                else:
-                    runtime.remove(container_name)
-                    details["runtime_rolled_back"] = False
-                    details["runtime_removed"] = True
-            except Exception as recovery_exc:
-                details["runtime_recovery_failed"] = True
-                details["runtime_recovery_error"] = str(recovery_exc)
-            return details
-
-        try:
+            checkpoint("database_apply")
             state = runtime.apply_external_image_service(
                 name=container_name,
                 image_ref=full_image,
@@ -1675,6 +1768,10 @@ class DBDeployer:
                 labels=labels,
                 replicas=replicas,
             )
+            runtime_mutated = True
+            checkpoint("database_runtime_applied")
+        except (DeploymentCancelled, StaleDeploymentWorkerError):
+            raise
         except DeploymentError as exc:
             recovery = recover_runtime("swarm_apply")
             log.error(
@@ -1704,6 +1801,7 @@ class DBDeployer:
             container = None
             last_error = ""
             while time.monotonic() < deadline:
+                checkpoint("database_sql_readiness")
                 try:
                     container = runtime.primary_task_container(container_name)
                     if container is not None:
@@ -1777,6 +1875,7 @@ class DBDeployer:
                 or environment.get("MYSQL_DATABASE")
                 or environment.get("MARIADB_DATABASE")
             )
+            checkpoint("database_before_credentials")
             ok, credential_message = _reconcile_mysql_credentials(
                 runtime.client,
                 container_name,
@@ -1787,6 +1886,7 @@ class DBDeployer:
                 database=database,
                 container_obj=container,
             )
+            checkpoint("database_after_credentials")
             if not ok:
                 recovery = recover_runtime("credential_reconciliation")
                 return DBDeployResult(
@@ -1842,6 +1942,8 @@ class DBDeployer:
         deployment_id: str | None = None,
         service_id: str | None = None,
         force_reinit: bool = False,
+        cancel_check: Callable[[], bool] | None = None,
+        ownership_check: Callable[[], bool] | None = None,
     ) -> DBDeployResult:
 
         from deployments.core.deployment_logger import DeploymentLogger
@@ -1855,6 +1957,11 @@ class DBDeployer:
         # 1. Validate
         # ====================================================================
 
+        _db_execution_checkpoint(
+            cancel_check=cancel_check,
+            ownership_check=ownership_check,
+            stage="database_validation",
+        )
         errors = validate_db_config(
             platform,
             cfg,
@@ -2340,6 +2447,8 @@ class DBDeployer:
                 deployment_id=deployment_id,
                 log=log,
                 registry_volume_rows=registry_volume_rows,
+                cancel_check=cancel_check,
+                ownership_check=ownership_check,
             )
 
         # ====================================================================
@@ -2542,43 +2651,19 @@ class DBDeployer:
         # Host config fallback
         # ====================================================================
 
+        # Resource limits are mandatory plan policy. Compatibility fallback may
+        # remove optional swap/tmpfs controls, but never CPU or memory limits.
         fallback_configs = [
             host_config_kwargs,
-
             {
                 k: v
                 for k, v in host_config_kwargs.items()
                 if k != "memswap_limit"
             },
-
             {
                 k: v
                 for k, v in host_config_kwargs.items()
-                if k not in {
-                    "memswap_limit",
-                    "nano_cpus",
-                }
-            },
-
-            {
-                k: v
-                for k, v in host_config_kwargs.items()
-                if k not in {
-                    "memswap_limit",
-                    "nano_cpus",
-                    "mem_limit",
-                }
-            },
-
-            {
-                k: v
-                for k, v in host_config_kwargs.items()
-                if k not in {
-                    "memswap_limit",
-                    "nano_cpus",
-                    "mem_limit",
-                    "tmpfs",
-                }
+                if k not in {"memswap_limit", "tmpfs"}
             },
         ]
 
@@ -2790,6 +2875,8 @@ class DBDeployer:
                     timeout=180,
                     root_password=root_password,
                     platform=platform,
+                    cancel_check=cancel_check,
+                    ownership_check=ownership_check,
                 )
             )
 

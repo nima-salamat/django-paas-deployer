@@ -287,7 +287,8 @@ class DeploymentLifecycleExecutor:
                         progress=100,
                         details=finalization,
                     )
-            context.assert_can_continue()
+            if self.store.status != sm.DEPLOY_SUCCEEDED:
+                context.assert_can_continue()
             if self.store.status != sm.DEPLOY_SUCCEEDED:
                 # The terminal store may have won a cancellation race while
                 # this worker was finishing activation.  Treat that result as

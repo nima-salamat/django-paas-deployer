@@ -546,6 +546,7 @@ class SwarmRuntime:
         self,
         *,
         service_name: str,
+        service_id: str | None = None,
         endpoints: Iterable[Any],
         networks: Iterable[str] = (),
     ) -> bool:
@@ -554,6 +555,7 @@ class SwarmRuntime:
 
         service = self.client.services.get(_validate_service_name(service_name))
         service.reload()
+        self._assert_service_owned(service, service_id=service_id)
 
         public_endpoints = [
             endpoint
@@ -611,6 +613,19 @@ class SwarmRuntime:
             return False
 
         self.ensure_network("proxy_net", attachable=True)
+        existing_aliases_by_name = {}
+        for item in task_template.get("Networks") or ():
+            if not isinstance(item, dict):
+                continue
+            target = str(item.get("Target") or item.get("target") or "").strip()
+            aliases = item.get("Aliases") or item.get("aliases") or []
+            if target:
+                try:
+                    target_name = str(self.client.networks.get(target).name or target)
+                except Exception:
+                    target_name = target
+                existing_aliases_by_name[target_name] = list(aliases or [])
+
         desired_names = []
         seen_names = set()
         for network_name in list(networks or ()) + ["proxy_net"]:
@@ -635,10 +650,13 @@ class SwarmRuntime:
 
         service.update(
             labels=labels,
-            networks=[NetworkAttachmentConfig(target=name) for name in desired_names],
+            networks=[
+                NetworkAttachmentConfig(target=name, aliases=existing_aliases_by_name.get(name, []))
+                for name in desired_names
+            ],
         )
         return True
-    def ensure_network(self, name: str, *, attachable: bool = True) -> str:
+    def ensure_network(self, name: str, *, attachable: bool = True, internal: bool | None = None) -> str:
         """Ensure a Swarm-compatible overlay network exists.
 
         Older PassDeployer versions created application private networks as
@@ -665,6 +683,7 @@ class SwarmRuntime:
                     value,
                     driver="overlay",
                     attachable=bool(attachable),
+                    internal=bool(internal) if internal is not None else False,
                     labels={"managed-by": "django-paas-deployer"},
                     check_duplicate=True,
                 )
@@ -689,6 +708,13 @@ class SwarmRuntime:
         attrs = network.attrs or {}
         driver = str(attrs.get("Driver") or "").strip().lower()
         if driver == "overlay":
+            if internal is not None and bool(attrs.get("Internal", False)) != bool(internal):
+                raise DeploymentError(
+                    f"Swarm network {value!r} conflicts with the immutable revision's internal-network policy.",
+                    stage="network_validation",
+                    code="SWARM_NETWORK_POLICY_MISMATCH",
+                    details={"network": value, "expected_internal": bool(internal), "actual_internal": bool(attrs.get("Internal", False))},
+                )
             return network.id
 
         labels = dict(attrs.get("Labels") or {})
@@ -705,6 +731,7 @@ class SwarmRuntime:
                     value,
                     driver="overlay",
                     attachable=bool(attachable),
+                    internal=bool(internal) if internal is not None else False,
                     labels={"managed-by": "django-paas-deployer"},
                     check_duplicate=True,
                 )
@@ -2606,14 +2633,16 @@ class SwarmRuntime:
             "networks": [
                 NetworkAttachmentConfig(
                     target=str(network_name),
-                    aliases=(
-                        [str(application_service)]
-                        if (
-                            application_service
-                            and str(network_name) != "proxy_net"
-                        )
-                        else []
-                    ),
+                    aliases=list(dict.fromkeys([
+                        *list(
+                            getattr(
+                                next((item for item in (config.networks or ()) if str(item.name) == str(network_name)), None),
+                                "aliases",
+                                (),
+                            ) or ()
+                        ),
+                        *([str(application_service)] if application_service and str(network_name) != "proxy_net" else []),
+                    ])),
                 )
                 for network_name in (service_doc.get("networks") or [])
             ],
@@ -2908,7 +2937,7 @@ class SwarmRuntime:
         from types import SimpleNamespace
 
         network_specs = [
-            SimpleNamespace(name=str(network), driver="overlay", internal=True, attachable=True)
+            SimpleNamespace(name=str(network), driver="overlay", internal=None, attachable=True)
             for network in networks
             if str(network).strip()
         ]
@@ -2965,7 +2994,7 @@ class SwarmRuntime:
         )
         self.assert_active()
         for network in network_specs:
-            self.ensure_network(network.name, attachable=True)
+            self.ensure_network(network.name, attachable=True, internal=getattr(network, "internal", None))
         if endpoint_specs and any(
             endpoint.protocol in {"http", "https", "ws"} and endpoint.exposure == "public"
             for endpoint in endpoint_specs
@@ -2988,6 +3017,14 @@ class SwarmRuntime:
         try:
             service = self.client.services.get(service_name)
             service.reload()
+            expected_service_id = str((labels or {}).get("passdeployer.service") or "").strip()
+            if not expected_service_id:
+                raise DeploymentError(
+                    "External-image Swarm services require a service ownership label.",
+                    stage="swarm_ownership",
+                    code="SWARM_RESOURCE_OWNERSHIP_UNKNOWN",
+                )
+            self._assert_service_owned(service, service_id=expected_service_id)
             service.update(
                 image=image_ref,
                 **{key: value for key, value in kwargs.items() if key != "name"},
@@ -3122,7 +3159,7 @@ class SwarmRuntime:
             runtime_options=runtime_options,
         )
         for network in config.networks or ():
-            self.ensure_network(network.name, attachable=True)
+            self.ensure_network(network.name, attachable=True, internal=getattr(network, "internal", None))
         if public_http_endpoints(config):
             self.ensure_network("proxy_net", attachable=True)
         spec = compile_compose_service(config, image_ref=image_ref, replicas=replicas)
@@ -3283,12 +3320,20 @@ class SwarmRuntime:
             }),
         )
 
-    def scale_service(self, name: str, replicas: int, *, timeout: float = 180.0) -> SwarmServiceState:
+    def scale_service(
+        self,
+        name: str,
+        replicas: int,
+        *,
+        timeout: float = 180.0,
+        service_id: str | None = None,
+    ) -> SwarmServiceState:
         """Scale an existing Swarm service without rebuilding its image."""
         self.assert_active()
         replicas = _validate_replicas(replicas)
         service = self.client.services.get(_validate_service_name(name))
         service.reload()
+        self._assert_service_owned(service, service_id=service_id)
         from docker.types import ServiceMode
         operation = {
             "name": str(service.name),
@@ -3328,10 +3373,11 @@ class SwarmRuntime:
             expected_image=expected_image,
         )
 
-    def rollback_service(self, name: str) -> bool:
+    def rollback_service(self, name: str, *, service_id: str | None = None) -> bool:
         """Request a server-side rollback to the previous Swarm service spec."""
         service = self.client.services.get(_validate_service_name(name))
         service.reload()
+        self._assert_service_owned(service, service_id=service_id)
         attrs = service.attrs or {}
         update_state = str((attrs.get("UpdateStatus") or {}).get("State") or "").strip().lower()
         if update_state in {"rollback_started", "rollback_paused", "rollback_completed"}:
@@ -3378,7 +3424,7 @@ class SwarmRuntime:
             service.reload()
             self._assert_service_owned(service, service_id=service_id)
             # Use the same versioned Swarm update path as other replica changes.
-            self.scale_service(name, 0, timeout=0.0)
+            self.scale_service(name, 0, timeout=0.0, service_id=service_id)
         except docker.errors.NotFound:
             return
 
@@ -3407,13 +3453,104 @@ class SwarmRuntime:
                 return False
             time.sleep(0.25)
 
+    def drain_service_group(self, service_id: str, *, timeout: float = 60.0) -> bool:
+        """Stop the owned process group and release stopped task containers."""
+        names = self.service_names_for_service(service_id)
+        task_container_ids: set[str] = set()
+        for name in names:
+            service = self.client.services.get(_validate_service_name(name))
+            service.reload()
+            self._assert_service_owned(service, service_id=str(service_id))
+            for task in service.tasks() or ():
+                status = task.get("Status") or {}
+                container_id = str((status.get("ContainerStatus") or {}).get("ContainerID") or "").strip()
+                if container_id:
+                    task_container_ids.add(container_id)
+
+        self.stop_service_group(str(service_id))
+        deadline = time.monotonic() + max(float(timeout), 1.0)
+        active_statuses = {"created", "running", "restarting", "paused"}
+        while True:
+            pending = False
+            for container_id in sorted(task_container_ids):
+                try:
+                    container = self.client.containers.get(container_id)
+                    container.reload()
+                except docker.errors.NotFound:
+                    continue
+                except docker.errors.DockerException as exc:
+                    raise DeploymentError(
+                        f"Unable to inspect task container {container_id!r} while draining.",
+                        stage="swarm_drain",
+                        code="SWARM_TASK_CONTAINER_INSPECTION_UNKNOWN",
+                        recoverable=True,
+                        details={"service_id": str(service_id), "container_id": container_id, "error": str(exc)},
+                    ) from exc
+                if str(getattr(container, "status", "") or "").lower() in active_statuses:
+                    pending = True
+                    break
+
+            for name in names:
+                try:
+                    service = self.client.services.get(_validate_service_name(name))
+                    service.reload()
+                    self._assert_service_owned(service, service_id=str(service_id))
+                    for task in service.tasks() or ():
+                        status = task.get("Status") or {}
+                        container_id = str(
+                            (status.get("ContainerStatus") or {}).get("ContainerID") or ""
+                        ).strip()
+                        if container_id:
+                            task_container_ids.add(container_id)
+                except docker.errors.NotFound:
+                    continue
+                except docker.errors.DockerException as exc:
+                    raise DeploymentError(
+                        f"Unable to refresh Swarm task inventory for {name!r} while draining.",
+                        stage="swarm_drain",
+                        code="SWARM_TASK_INSPECTION_UNKNOWN",
+                        recoverable=True,
+                        details={"service_id": str(service_id), "service": name, "error": str(exc)},
+                    ) from exc
+                state = self.inspect_service(name)
+                if state is not None and (state.replicas_desired > 0 or state.replicas_running > 0):
+                    pending = True
+                    break
+
+            if not pending:
+                for container_id in sorted(task_container_ids):
+                    try:
+                        container = self.client.containers.get(container_id)
+                        container.reload()
+                        if str(getattr(container, "status", "") or "").lower() not in active_statuses:
+                            container.remove(force=True)
+                    except docker.errors.NotFound:
+                        continue
+                    except docker.errors.DockerException as exc:
+                        raise DeploymentError(
+                            f"Unable to remove drained task container {container_id!r}.",
+                            stage="swarm_drain",
+                            code="SWARM_TASK_CONTAINER_REMOVE_FAILED",
+                            recoverable=True,
+                            details={"service_id": str(service_id), "container_id": container_id, "error": str(exc)},
+                        ) from exc
+                return True
+
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.25)
+
     def service_names_for_service(self, service_id: str) -> list[str]:
         names: list[str] = []
         try:
             services = self.client.services.list(
                 filters={"label": f"passdeployer.service={service_id}"}
             )
-            names = [str(service.name) for service in services]
+            names = []
+            for service in services:
+                labels = self._managed_service_labels(service)
+                if labels.get("managed-by") == "django-paas-deployer" and labels.get("passdeployer.service") == str(service_id):
+                    names.append(str(service.name))
         except docker.errors.DockerException as exc:
             raise DeploymentError(
                 f"Unable to enumerate Swarm services for service {service_id!r}.",
@@ -3444,7 +3581,7 @@ class SwarmRuntime:
         for name in names:
             current = self.inspect_service(name)
             target_replicas = max(1, int(current.replicas_desired or 1)) if current is not None else 1
-            self.stop(name)
+            self.stop(name, service_id=str(service_id))
             deadline = time.monotonic() + float(timeout)
             while time.monotonic() < deadline:
                 state = self.inspect_service(name)
@@ -3452,8 +3589,11 @@ class SwarmRuntime:
                     break
                 time.sleep(0.5)
             service = self.client.services.get(_validate_service_name(name))
-            service.scale(target_replicas)
-            states[name] = self.wait_ready(name, timeout=timeout)
+            service.reload()
+            self._assert_service_owned(service, service_id=str(service_id))
+            states[name] = self.scale_service(
+                name, target_replicas, timeout=timeout, service_id=str(service_id)
+            )
         return states
 
     def stop_service_group(self, service_id: str) -> None:
@@ -3499,6 +3639,8 @@ class SwarmRuntime:
         for name in names:
             try:
                 service = self.client.services.get(_validate_service_name(name))
+                service.reload()
+                self._assert_service_owned(service, service_id=str(service_id))
                 for task in service.tasks() or ():
                     status = task.get("Status") or {}
                     container_id = str(
@@ -3523,7 +3665,7 @@ class SwarmRuntime:
                 ) from exc
 
         for name in names:
-            self.remove(name)
+            self.remove(name, service_id=str(service_id))
 
         if not task_container_ids:
             return

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Mapping
 
+from django.db import transaction
+
 from deploy.models import Deploy
+from deployments.common.exceptions import DeploymentCancelled, StaleDeploymentWorkerError
 from deployments.application.context import DeploymentExecutionContext
 from deployments.core.state.manager import StateManager
 from deployments.common import state_machine as sm
@@ -164,26 +167,76 @@ class DjangoDeploymentLifecycleStore:
         state: str = "active",
         metadata: Mapping[str, object] | None = None,
     ) -> None:
-        """Record external runtime ownership without opening a long transaction."""
+        """Record runtime ownership only while this worker still owns the lifecycle."""
         from deploy.models import DeploymentResource
+        from services.models import Service
 
         if not name:
             return
-        DeploymentResource.objects.update_or_create(
-            deployment_id=int(self.deployment_id),
-            kind=str(kind)[:64],
-            name=str(name)[:255],
-            defaults={
-                "runtime_id": str(runtime_id or "")[:255],
-                "state": str(state)[:32],
-                "owned": True,
-                "metadata": dict(metadata or {}),
-                "last_error": "",
-            },
-        )
+        task_id = str(self.task_id or context.worker_task_id or "").strip()
+        if not task_id:
+            context.assert_can_continue()
+
+        with transaction.atomic():
+            deploy = (
+                Deploy.objects.select_for_update()
+                .filter(pk=self.deployment_id)
+                .first()
+            )
+            if deploy is None:
+                raise StaleDeploymentWorkerError(
+                    "Cannot journal a runtime resource for a missing deployment.",
+                    details={"deployment_id": str(self.deployment_id)},
+                )
+            service = (
+                Service.objects.select_for_update()
+                .filter(pk=deploy.service_id)
+                .first()
+            )
+            if service is None or (
+                task_id
+                and (
+                    str(deploy.execution_task_id or "") != task_id
+                    or str(service.task_id or "") != task_id
+                )
+            ):
+                raise StaleDeploymentWorkerError(
+                    "Cannot journal a runtime resource after deployment ownership was lost.",
+                    details={
+                        "deployment_id": str(self.deployment_id),
+                        "service_id": str(deploy.service_id),
+                        "worker_task_id": task_id,
+                    },
+                )
+            if sm.is_deploy_terminal(deploy.status):
+                raise StaleDeploymentWorkerError(
+                    "Cannot journal a runtime resource after deployment became terminal.",
+                    details={
+                        "deployment_id": str(self.deployment_id),
+                        "status": str(deploy.status),
+                    },
+                )
+            if deploy.cancel_requested:
+                raise DeploymentCancelled(
+                    "Deployment cancellation was requested before runtime resource journaling.",
+                    details={"deployment_id": str(self.deployment_id)},
+                )
+            DeploymentResource.objects.update_or_create(
+                deployment_id=int(self.deployment_id),
+                kind=str(kind)[:64],
+                name=str(name)[:255],
+                defaults={
+                    "runtime_id": str(runtime_id or "")[:255],
+                    "state": str(state)[:32],
+                    "owned": True,
+                    "metadata": dict(metadata or {}),
+                    "last_error": "",
+                },
+            )
 
     def is_terminal(self) -> bool:
         return sm.is_deploy_terminal(self.status)
 
 
 __all__ = ["DjangoDeploymentLifecycleStore"]
+

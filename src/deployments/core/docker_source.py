@@ -268,16 +268,52 @@ def _command(value: Any, field: str) -> str | None:
 def analyze_dockerfile(text: str, *, source_file: str) -> list[DockerPolicyFinding]:
     findings: list[DockerPolicyFinding] = []
     logical: list[tuple[int, str]] = []
+    raw_lines = text.splitlines()
     pending = ""
     start = 1
-    for number, raw in enumerate(text.splitlines(), 1):
+    index = 0
+    heredoc_pattern = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+    while index < len(raw_lines):
+        number = index + 1
+        raw = raw_lines[index]
+        line = raw.rstrip()
+        is_run = line.lstrip().upper().startswith("RUN ")
+        heredoc_matches = list(heredoc_pattern.finditer(line)) if is_run else []
+        if heredoc_matches and not pending:
+            start = number
+            bodies = []
+            cursor = index + 1
+            delimiter = heredoc_matches[0].group(2)
+            while cursor < len(raw_lines):
+                body_line = raw_lines[cursor]
+                compare_line = body_line.lstrip("\t") if "<<-" in line else body_line
+                if compare_line.strip() == delimiter:
+                    break
+                bodies.append(body_line)
+                cursor += 1
+            if cursor >= len(raw_lines):
+                findings.append(DockerPolicyFinding(
+                    "dockerfile_heredoc_unterminated",
+                    "critical",
+                    "deny",
+                    "RUN heredoc is unterminated and cannot be safely inspected.",
+                    source_file,
+                    number,
+                ))
+                logical.append((start, line + "\\n" + "\\n".join(bodies)))
+                index = len(raw_lines)
+                continue
+            logical.append((start, line + "\\n" + "\\n".join(bodies)))
+            index = cursor + 1
+            continue
+
         if not pending:
             start = number
-        line = raw.rstrip()
         pending += line[:-1] + " " if line.endswith("\\") else line
         if not line.endswith("\\"):
             logical.append((start, pending.strip()))
             pending = ""
+        index += 1
     if pending:
         logical.append((start, pending.strip()))
 
