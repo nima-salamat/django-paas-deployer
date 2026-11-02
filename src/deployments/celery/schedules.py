@@ -1547,12 +1547,20 @@ def _native_reconciliation_plan(
     except Exception:
         release = None
     if release is None:
-        historical_release = getattr(deploy, "release_reference", None)
+        explicit_release = getattr(deploy, "release_reference", None)
+        explicit_status = str(getattr(explicit_release, "status", "") or "").lower()
+        is_rollback_attempt = str(getattr(deploy, "operation", "") or "").lower() == "rollback"
         if (
-            historical_release is not None
-            and str(getattr(historical_release, "status", "")).lower() == "promoted"
+            explicit_release is not None
+            and (
+                explicit_status == "promoted"
+                or (is_rollback_attempt and explicit_status == "ready")
+            )
         ):
-            release = historical_release
+            # A rollback attempt is intentionally bound to a prepared immutable
+            # Release clone. Use that exact target while it is READY; ordinary
+            # reconciliation must never resurrect a retired historical FK.
+            release = explicit_release
     revision = getattr(service, "active_revision", None) or getattr(deploy, "revision", None)
     if revision is None:
         return None
