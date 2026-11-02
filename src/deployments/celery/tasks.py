@@ -238,6 +238,32 @@ def restart_service(self, service_id) -> None:
             raise self.retry(exc=exc)
         logger.exception("Restart exhausted retries for service=%s", service_id)
 
+@shared_task(bind=True, max_retries=0, name="deployments.celery.tasks.rollback_deployment")
+def rollback_deployment(
+    self,
+    deployment_id: str | int,
+    *,
+    expected_lifecycle_generation: int,
+    expected_previous_deploy_id: str,
+) -> None:
+    """Restore a previously promoted immutable Release through RuntimeContract."""
+    from deployments.celery.services.rollback_service import ReleaseRollbackService
+
+    try:
+        ReleaseRollbackService().execute(
+            deployment_id,
+            task_id=str(self.request.id),
+            expected_lifecycle_generation=int(expected_lifecycle_generation),
+            expected_previous_deploy_id=str(expected_previous_deploy_id),
+        )
+    except InvalidServiceStateError:
+        logger.info(
+            "Skipping stale or non-claimable rollback attempt=%s.",
+            deployment_id,
+        )
+        return
+
+
 @shared_task(bind=True, max_retries=2, default_retry_delay=10)
 def _mark_base_image_retry_pending(base_image_id, task_id: str, exc: Exception) -> None:
     row = BaseRuntimeImage.objects.filter(pk=base_image_id).values(
