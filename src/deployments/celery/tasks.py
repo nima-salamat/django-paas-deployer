@@ -226,6 +226,7 @@ def deploy(self, deploy_id) -> None:
             Deploy.objects.filter(
                 pk=deploy_id,
                 execution_task_id=str(self.request.id),
+                service__task_id=str(self.request.id),
                 status__in=(
                     DeploymentStatusChoices.PENDING,
                     DeploymentStatusChoices.RUNNING,
