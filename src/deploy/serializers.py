@@ -16,83 +16,98 @@ def _integrity_constraint_name(exc: IntegrityError) -> str:
     diag = getattr(cause, "diag", None)
     return str(getattr(diag, "constraint_name", "") or "").strip()
 class MaskedDBConfigField(serializers.JSONField):
-    """JSONField that strips sensitive DB credentials on read, but accepts full dict on write.
+    """Expose sensitive deployment config only to explicitly authorized viewers.
 
-    Secrets are visible only to the service owner or a share recipient with
-    can_view_db_credentials=True.
+    This field is used for application and database deployments. Secret values
+    can occur in nested env dictionaries, catalog-generated settings and DSN
+    strings, so redaction must be recursive and independent of platform.
     """
+
+    _SENSITIVE_TOKENS = (
+        "password", "secret", "token", "private_key", "api_key", "apikey",
+        "authorization", "credential", "dsn", "database_url", "connection_string",
+    )
+    _URL_CREDENTIALS = re.compile(
+        r"(?i)([a-z][a-z0-9+.-]*://[^\s/:@]+:)[^\s/@]+(@)"
+    )
+    _INLINE_PASSWORD = re.compile(
+        r"(?i)(\b(?:password|passwd|pwd)\s*=\s*)('[^']*'|\"[^\"]*\"|[^;\s]+)"
+    )
+
+    @classmethod
+    def _sensitive_key(cls, key):
+        lowered = str(key).strip().lower().replace("-", "_")
+        return lowered in SENSITIVE_CONFIG_KEYS or any(
+            token in lowered for token in cls._SENSITIVE_TOKENS
+        )
+
+    @classmethod
+    def _redact(cls, value, secret_values=()):
+        if isinstance(value, dict):
+            return {
+                key: (
+                    "[REDACTED]"
+                    if cls._sensitive_key(key)
+                    else cls._redact(item, secret_values)
+                )
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [cls._redact(item, secret_values) for item in value]
+        if isinstance(value, tuple):
+            return [cls._redact(item, secret_values) for item in value]
+        if isinstance(value, str):
+            cleaned = cls._URL_CREDENTIALS.sub(r"\1[REDACTED]\2", value)
+            cleaned = cls._INLINE_PASSWORD.sub(r"\1[REDACTED]", cleaned)
+            for secret in secret_values:
+                if secret:
+                    cleaned = cleaned.replace(str(secret), "[REDACTED]")
+            return cleaned
+        return value
+
     def to_representation(self, value):
         data = super().to_representation(value)
         if not isinstance(data, dict):
-            return data
-        request = self.context.get("request")
-
-        # Catalog-managed application deploys may contain generated secrets in
-        # their environment configuration even when their platform is Docker
-        # rather than a DB platform.  Never expose those values through the
-        # normal deploy API representation.
-        if data.get("catalog_managed"):
-            sensitive_tokens = ("password", "secret", "token", "private_key", "api_key", "signing_key")
-            cleaned = dict(data)
-            secret_values = set()
-            parent = getattr(self, "parent", None)
-            deploy = getattr(parent, "instance", None) if parent is not None else None
-            try:
-                binding = getattr(getattr(deploy, "service", None), "application_binding", None)
-                instance = getattr(binding, "instance", None)
-                secret_values = {str(value) for value in (getattr(instance, "secret_config", {}) or {}).values() if value not in (None, "")}
-            except Exception:
-                secret_values = set()
-
-            def redact(value):
-                if isinstance(value, dict):
-                    return {key: redact(item) for key, item in value.items()}
-                if isinstance(value, list):
-                    return [redact(item) for item in value]
-                if isinstance(value, str):
-                    out = value
-                    for secret in secret_values:
-                        if secret:
-                            out = out.replace(secret, "[REDACTED]")
-                    return out
-                return value
-
-            for key in list(cleaned):
-                lowered = str(key).lower()
-                if key in SENSITIVE_CONFIG_KEYS or any(token in lowered for token in sensitive_tokens):
-                    cleaned[key] = "[REDACTED]"
-            return redact(cleaned)
-
-        platform = data.get("platform") or ""
-        if platform not in DB_PLATFORMS:
             return data
 
         request = self.context.get("request")
         parent = getattr(self, "parent", None)
         deploy = getattr(parent, "instance", None) if parent is not None else None
-        # list serializer: instance may be on parent
-        if deploy is None and parent is not None:
-            deploy = getattr(parent, "instance", None)
+        service = getattr(deploy, "service", None) if deploy is not None else None
+        user = getattr(request, "user", None) if request is not None else None
 
         allow_secrets = False
-        user = getattr(request, "user", None) if request else None
-        service = getattr(deploy, "service", None) if deploy is not None else None
-        if user and service is not None:
-            if str(service.user_id) == str(user.id):
+        if user is not None and service is not None and getattr(user, "is_authenticated", False):
+            if str(service.user_id) == str(getattr(user, "id", "")):
                 allow_secrets = True
             else:
                 try:
                     from services.api.sharing import user_can_access_service
-                    ok, share = user_can_access_service(
+                    allowed, share = user_can_access_service(
                         service, user, action="can_view_db_credentials"
                     )
-                    allow_secrets = bool(ok and share and share.allows("can_view_db_credentials"))
+                    allow_secrets = bool(
+                        allowed and share and share.allows("can_view_db_credentials")
+                    )
                 except Exception:
                     allow_secrets = False
 
         if allow_secrets:
             return data
-        return {k: v for k, v in data.items() if k not in SENSITIVE_CONFIG_KEYS}
+
+        secret_values = set()
+        try:
+            binding = getattr(service, "application_binding", None)
+            instance = getattr(binding, "instance", None)
+            secret_config = getattr(instance, "secret_config", {}) or {}
+            if isinstance(secret_config, dict):
+                secret_values = {
+                    str(item) for item in secret_config.values()
+                    if item not in (None, "")
+                }
+        except Exception:
+            secret_values = set()
+        return self._redact(data, secret_values)
 
 
 class DeployLogSerializer(serializers.ModelSerializer):
