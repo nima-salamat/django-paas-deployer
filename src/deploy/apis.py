@@ -721,6 +721,26 @@ class DeployViewSet(ModelViewSet):
                         status=status.HTTP_409_CONFLICT,
                     )
 
+                from deployments.infrastructure.django_runtime import DjangoRuntimeSelectionResolver
+                from deployments.runtime.contract import RuntimeBackend
+
+                rollback_selection = DjangoRuntimeSelectionResolver().resolve(
+                    service=service,
+                    revision=target_release.revision,
+                    deployment=active_deploy,
+                    probe=False,
+                )
+                if rollback_selection.backend != RuntimeBackend.SWARM.value:
+                    return Response(
+                        {
+                            "result": "error",
+                            "code": "ROLLBACK_RUNTIME_UNSUPPORTED",
+                            "detail": _("Immutable release rollback is currently supported only by the native Swarm runtime."),
+                            "runtime_backend": rollback_selection.backend,
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
                 generation = bump_lifecycle(service.pk, desired_state="running")
                 now = timezone.now()
 
