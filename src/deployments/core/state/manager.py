@@ -153,6 +153,61 @@ class StateManager:
             )
 
     @classmethod
+    def _project_service_after_cancellation(
+        cls,
+        service,
+        *,
+        task_id: str | None = None,
+        details: Optional[dict] = None,
+    ) -> None:
+        """Restore the Service projection after a deployment cancellation.
+
+        A cancelled replacement keeps the previously active revision running.
+        A cancelled first deployment returns to STOPPED once its runtime cleanup
+        has completed. Failed rollback/cleanup is surfaced as FAILED and remains
+        eligible for desired-state reconciliation.
+        """
+        from core.global_settings.config import SERVICE_STATUS_CHOICES
+
+        if service is None or service.status not in (
+            SERVICE_STATUS_CHOICES.QUEUED,
+            SERVICE_STATUS_CHOICES.DEPLOYING,
+        ):
+            return
+        if (
+            task_id
+            and str(service.task_id or "")
+            and str(service.task_id or "") != str(task_id)
+        ):
+            return
+
+        info = dict(details or {})
+        cleanup_failed = bool(
+            info.get("cleanup_failed")
+            or info.get("rollback_failed")
+        )
+        has_previous_revision = bool(
+            getattr(service, "active_revision_id", None)
+            or getattr(service, "selected_deploy_id", None)
+        )
+        if cleanup_failed:
+            target = SERVICE_STATUS_CHOICES.FAILED
+        elif has_previous_revision:
+            target = SERVICE_STATUS_CHOICES.RUNNING
+        else:
+            target = SERVICE_STATUS_CHOICES.STOPPED
+
+        cls.transition_service(
+            service.pk,
+            target,
+            update_fields={
+                "desired_state": "running" if has_previous_revision else "stopped",
+                "task_id": None,
+                "deploy_started": None,
+            },
+        )
+
+    @classmethod
     def transition_deploy(
         cls,
         deploy_id: int,
@@ -486,6 +541,17 @@ class StateManager:
                     occurred_at=now,
                     payload=payload,
                 )
+            if target == sm.DEPLOY_CANCELLED:
+                service = (
+                    Service.objects.select_for_update()
+                    .filter(pk=deploy.service_id)
+                    .first()
+                )
+                cls._project_service_after_cancellation(
+                    service,
+                    task_id=str(deploy.execution_task_id or ""),
+                    details=dict((event_payload or {}).get("details") or update_fields or {}),
+                )
             return True
 
 
@@ -532,6 +598,17 @@ class StateManager:
                 level="warning",
                 occurred_at=now,
                 payload=event_payload,
+            )
+            from services.models import Service
+            service = (
+                Service.objects.select_for_update()
+                .filter(pk=deploy.service_id)
+                .first()
+            )
+            cls._project_service_after_cancellation(
+                service,
+                task_id=str(deploy.execution_task_id or ""),
+                details={"controlled_by": "scheduler"},
             )
             return True
 
@@ -866,17 +943,17 @@ class StateManager:
                 return False
 
             service = None
-            if terminal and deploy.revision_id:
+            if terminal:
                 from services.models import Service  # type: ignore
                 service = Service.objects.select_for_update().filter(pk=deploy.service_id).first()
                 # A newer activation means this deployment attempt has already
                 # been superseded. A stale worker may still write diagnostics,
                 # but it must not become the authoritative terminal outcome.
                 if (
-                    service is not None
+                    target == sm.DEPLOY_SUCCEEDED
+                    and service is not None
                     and service.active_revision_id is not None
-                    and str(service.active_revision_id) != str(deploy.revision_id)
-                    and target == sm.DEPLOY_SUCCEEDED
+                    and str(service.active_revision_id) != str(deploy.revision_id or "")
                 ):
                     return False
 
@@ -952,6 +1029,12 @@ class StateManager:
                     level=str(event_payload.get("level") or "info")[:16],
                     occurred_at=timezone.now(),
                     payload=event_payload,
+                )
+            if terminal and effective_target == sm.DEPLOY_CANCELLED and service is not None:
+                cls._project_service_after_cancellation(
+                    service,
+                    task_id=task_id,
+                    details=dict(event_payload.get("details") or {}) if event_payload else effective_updates,
                 )
             logger.info(
                 "StateManager: owned deploy %s %s -> %s",
