@@ -65,6 +65,80 @@ from .schedules import monitor_services  # noqa: F401  — re-export for beat
 logger = logging.getLogger(__name__)
 
 
+def _finalize_owned_deployment_failure(deploy_id, task_id: str, error: DeploymentError) -> bool:
+    """Commit a final failure only while this task still owns the Service."""
+    with transaction.atomic():
+        deploy_item = (
+            Deploy.objects.select_for_update()
+            .filter(pk=deploy_id)
+            .first()
+        )
+        if deploy_item is None:
+            return False
+        service = (
+            Service.objects.select_for_update()
+            .filter(pk=deploy_item.service_id)
+            .first()
+        )
+        if service is None or str(service.task_id or "") != str(task_id):
+            return False
+
+        if (
+            str(deploy_item.execution_task_id or "") == str(task_id)
+            and deploy_item.status in (
+                DeploymentStatusChoices.PENDING,
+                DeploymentStatusChoices.RUNNING,
+            )
+        ):
+            StateManager.transition_deploy_terminal_if_owned(
+                deploy_item.pk,
+                DeploymentStatusChoices.FAILED,
+                task_id=str(task_id),
+                update_fields={
+                    "stage": str(getattr(error, "stage", None) or "deployment_failed")[:64],
+                    "status_message": str(error.user_message or "Deployment failed.")[:500],
+                    "error_message": str(error.user_message or "Deployment failed.")[:1000],
+                    "progress": 100,
+                },
+                event_payload={
+                    "event_id": str(uuid.uuid4()),
+                    "trace_id": str(deploy_item.pk),
+                    "deployment_id": str(deploy_item.pk),
+                    "service_id": str(deploy_item.service_id),
+                    "revision_id": str(deploy_item.revision_id or ""),
+                    "task_id": str(task_id),
+                    "event_type": "deployment.final_failure.error",
+                    "stage": str(getattr(error, "stage", None) or "deployment_failed")[:64],
+                    "level": "error",
+                    "message": str(error.user_message or "Deployment failed.")[:500],
+                    "progress": 100,
+                    "details": {
+                        "error_code": str(getattr(error, "code", "DEPLOYMENT_FAILED")),
+                        "error_category": str(getattr(error, "category", "deployment_error")),
+                        "recoverable": bool(getattr(error, "recoverable", False)),
+                        "controlled_by": "celery_retry_policy",
+                    },
+                },
+            )
+            deploy_item.refresh_from_db(fields=["status"])
+
+        if (
+            deploy_item.status == DeploymentStatusChoices.FAILED
+            and service.status in (
+                SERVICE_STATUS_CHOICES.QUEUED,
+                SERVICE_STATUS_CHOICES.DEPLOYING,
+            )
+            and str(service.task_id or "") == str(task_id)
+        ):
+            StateManager.transition_service(
+                service.pk,
+                SERVICE_STATUS_CHOICES.FAILED,
+                update_fields={"deploy_started": None, "task_id": None},
+            )
+            return True
+        return False
+
+
 # ===========================================================================
 # App deploy / stop
 # ===========================================================================
@@ -133,13 +207,16 @@ def deploy(self, deploy_id) -> None:
         if Deploy.objects.filter(pk=deploy_id, cancel_requested=True).exists():
             logger.info("Deploy %s is already cancelled; skipping worker execution.", deploy_id)
             return
-        DeployService().execute(deploy_id, task_id=str(self.request.id))
-    except (InvalidServiceStateError, DeploymentValidationError,
-            OrchestratorDeploymentError, ContainerTimeoutError):
-        # These are permanent deployment failures. The DB deployment state has
-        # already been terminalized by DeployService; re-raise so Celery records
-        # the task as FAILED and Ready App link_error handlers can run.
-        logger.exception("Deployment did not complete for deploy_id: %s", deploy_id)
+        DeployService().execute(
+            deploy_id,
+            task_id=str(self.request.id),
+            allow_owned_retry=bool(self.request.retries),
+        )
+    except InvalidServiceStateError:
+        logger.info(
+            "Skipping deploy execution because lifecycle ownership/state changed for deploy_id=%s.",
+            deploy_id,
+        )
         raise
     except DeploymentError as exc:
         # DeploymentError with recoverable=True MAY be retried.  Others
@@ -166,13 +243,19 @@ def deploy(self, deploy_id) -> None:
                 deploy_id, self.request.retries + 1, self.max_retries + 1, exc,
             )
             raise self.retry(exc=exc)
-        if getattr(exc, "recoverable", False) and not retry_owner:
+        if not retry_owner and getattr(exc, "recoverable", False):
             logger.info(
-                "Not retrying deployment %s because its attempt is already terminal or no longer owned by task=%s.",
+                "Not retrying deployment %s because its attempt is terminal or no longer owned by task=%s.",
                 deploy_id,
                 self.request.id,
             )
-        logger.exception("Permanent deployment error for deploy_id: %s", deploy_id)
+        elif retry_owner:
+            _finalize_owned_deployment_failure(
+                deploy_id,
+                str(self.request.id),
+                exc,
+            )
+        logger.exception("Deployment failed after retry policy evaluation for deploy_id: %s", deploy_id)
         raise
     except Exception as exc:
         # Unknown Python exceptions are platform bugs by default, not
@@ -184,6 +267,11 @@ def deploy(self, deploy_id) -> None:
             logger.info("Deploy %s was cancelled while failing; suppressing retry.", deploy_id)
             return
         translated = to_deployment_error(exc, stage="deployment")
+        _finalize_owned_deployment_failure(
+            deploy_id,
+            str(self.request.id),
+            translated,
+        )
         logger.exception(
             "Non-recoverable deployment exception for deploy_id=%s: code=%s technical=%s",
             deploy_id, translated.code, translated.technical_message,
