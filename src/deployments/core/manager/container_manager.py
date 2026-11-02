@@ -603,6 +603,46 @@ class Container(Client):
         except _RETRYABLE_DOCKER_ERRORS as exc:
             self._raise_with_logs(container, exc)
 
+    def restart(self, timeout: int = 10):
+        """Restart an existing container and verify that Docker reports it running."""
+        try:
+            container = self.client.containers.get(self.name)
+        except docker.errors.NotFound as exc:
+            raise ContainerError(
+                f"Container '{self.name}' was not found during restart.",
+                details={"container": self.name},
+            ) from exc
+
+        try:
+            retry_with_backoff(
+                lambda: container.restart(timeout=timeout),
+                retries=2,
+                base_delay=0.5,
+                max_delay=2.0,
+                retry_on=_RETRYABLE_DOCKER_ERRORS,
+                retry_if=docker_retry_predicate(stage="container_restart"),
+                skip_on=(docker.errors.NotFound,),
+                label=f"container.restart[{self.name}]",
+            )
+            container.reload()
+            if str(getattr(container, "status", "")).lower() != "running":
+                self._raise_with_logs(
+                    container,
+                    ContainerError(
+                        f"Container '{self.name}' did not remain running after restart.",
+                        details={"container": self.name, "status": getattr(container, "status", "unknown")},
+                    ),
+                )
+            logger.info("Container '%s' restarted; status=%s", self.name, container.status)
+            return container
+        except docker.errors.NotFound as exc:
+            raise ContainerError(
+                f"Container '{self.name}' vanished during restart.",
+                details={"container": self.name},
+            ) from exc
+        except _RETRYABLE_DOCKER_ERRORS as exc:
+            self._raise_with_logs(container, exc)
+
     def _raise_with_logs(self, container, exc) -> None:
         logs = ""
         status = "unknown"
