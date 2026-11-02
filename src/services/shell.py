@@ -1188,7 +1188,7 @@ def _resolve_container(service: Service):
 
         runtime = SwarmRuntime()
         state = runtime.inspect_service(name)
-        if state is None or state.replicas_running != 1:
+        if state is None or int(state.replicas_running or 0) <= 0:
             raise ValidationError("The service does not currently have a running Swarm task.")
         try:
             docker_service = runtime.client.services.get(name)
