@@ -130,12 +130,15 @@ def _clean(value: Any) -> str:
 
 
 def _resolve_db_replicas(cfg: dict[str, Any], default: int = 1) -> int:
-    """Resolve the database Swarm replica count from the immutable runtime config.
+    """Resolve a standalone database replica count.
 
-    Ready App/runtime revisions store replica intent in their process graph. A
-    top-level ``replicas`` value is accepted for compatibility, then the
-    enabled web process (the canonical DB process name) is used, finally the
-    safe default of one replica is applied.
+    A Docker Swarm replica count is not a database replication topology.
+    The database deployer currently creates one ordinary database process
+    with persistent storage; it does not configure MySQL/InnoDB Cluster,
+    PostgreSQL streaming replication, MongoDB replica sets, or Redis
+    Sentinel/Cluster. Running multiple independent database processes over
+    the same logical volume is unsafe, so fail closed until an engine-specific
+    clustering strategy is implemented.
     """
     raw = cfg.get("replicas") if isinstance(cfg, dict) else None
     if raw in (None, ""):
@@ -147,7 +150,7 @@ def _resolve_db_replicas(cfg: dict[str, Any], default: int = 1) -> int:
                 (
                     item for item in processes
                     if isinstance(item, dict)
-                    and str(item.get("name") or "").strip().lower() == "web"
+                    and str(item.get("name") or "").strip().lower() in {"web", "database"}
                     and bool(item.get("enabled", True))
                 ),
                 None,
@@ -166,12 +169,22 @@ def _resolve_db_replicas(cfg: dict[str, Any], default: int = 1) -> int:
     try:
         replicas = int(raw)
     except (TypeError, ValueError) as exc:
-        raise DeploymentError("Database replicas must be an integer.", stage="swarm_validation") from exc
-    if not 1 <= replicas <= 8:
         raise DeploymentError(
-            "Database services support between 1 and 8 replicas.",
+            "Database replicas must be an integer.",
             stage="swarm_validation",
-            user_message="Database services support between 1 and 8 replicas.",
+            code="DATABASE_REPLICA_COUNT_INVALID",
+        ) from exc
+    if replicas != 1:
+        raise DeploymentError(
+            "Standalone database deployments support exactly one replica. "
+            "A database cluster requires an engine-specific replication topology.",
+            stage="swarm_validation",
+            code="DATABASE_CLUSTER_UNSUPPORTED",
+            user_message=(
+                "This database deployment supports one replica. "
+                "Multi-replica database clusters are not enabled for this database engine."
+            ),
+            details={"requested_replicas": replicas, "supported_replicas": 1},
         )
     return replicas
 
