@@ -3,6 +3,7 @@ import functools
 import hashlib
 import json
 import logging
+import re
 import os
 import secrets
 import shutil
@@ -1279,20 +1280,42 @@ class DeployViewSet(ModelViewSet):
                     )
 
                 env_update = updates.get("env")
-                if isinstance(env_update, dict):
+                if isinstance(env_update, (dict, list, tuple)):
                     # Credential changes must use the engine's explicit
-                    # top-level reconciliation contract. Arbitrary env keys
-                    # such as MYSQL_ROOT_PASSWORD or DATABASE_URL must not
-                    # bypass that contract.
+                    # top-level reconciliation contract. Inspect nested keys
+                    # and embedded DSN/URL values so an innocuous key name
+                    # such as URL cannot bypass the rotation capability gate.
                     sensitive_env_tokens = (
-                        "password", "secret", "token", "database_url",
-                        "connection", "dsn", "credential",
+                        "password", "passwd", "pwd", "secret", "token",
+                        "database_url", "connection", "dsn", "credential",
+                        "api_key", "apikey", "authorization", "private_key",
                     )
-                    unsupported_mutations.update(
-                        f"env.{key}"
-                        for key in env_update
-                        if any(token in str(key).lower().replace("-", "_") for token in sensitive_env_tokens)
-                    )
+
+                    def _sensitive_env_paths(value, prefix="env"):
+                        found = []
+                        if isinstance(value, dict):
+                            for key, item in value.items():
+                                key_path = f"{prefix}.{key}"
+                                normalized_key = str(key).lower().replace("-", "_")
+                                if any(token in normalized_key for token in sensitive_env_tokens):
+                                    found.append(key_path)
+                                else:
+                                    found.extend(_sensitive_env_paths(item, key_path))
+                        elif isinstance(value, (list, tuple)):
+                            for index, item in enumerate(value):
+                                found.extend(_sensitive_env_paths(item, f"{prefix}[{index}]"))
+                        elif isinstance(value, str):
+                            if re.search(
+                                r"(?i)\\b(?:password|passwd|pwd)\\s*=\\s*[^;\\s]+",
+                                value,
+                            ) or re.search(
+                                r"(?i)[a-z][a-z0-9+.-]*://[^\\s/:@]+:[^\\s/@]+@",
+                                value,
+                            ):
+                                found.append(prefix)
+                        return found
+
+                    unsupported_mutations.update(_sensitive_env_paths(env_update))
                 if unsupported_mutations:
                     return Response(
                         {
