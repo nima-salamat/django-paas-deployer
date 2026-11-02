@@ -397,6 +397,57 @@ def rollback_deployment(
             deployment_id,
         )
         return
+    except Exception as exc:
+        logger.exception("Rollback attempt=%s failed before completion.", deployment_id)
+        task_id = str(self.request.id or "")
+        try:
+            with transaction.atomic():
+                locked = (
+                    Deploy.objects.select_for_update()
+                    .filter(pk=deployment_id)
+                    .first()
+                )
+                if (
+                    locked is not None
+                    and str(locked.execution_task_id or "") == task_id
+                    and locked.status in (
+                        DeploymentStatusChoices.PENDING,
+                        DeploymentStatusChoices.RUNNING,
+                    )
+                ):
+                    StateManager.transition_deploy_terminal_if_owned(
+                        locked.pk,
+                        DeploymentStatusChoices.FAILED,
+                        task_id=task_id,
+                        update_fields={
+                            "stage": "rollback_failed",
+                            "status_message": "Release rollback failed before it could be completed.",
+                            "error_message": str(exc)[:1000],
+                            "rollback_status": "failed",
+                            "reconciliation_required": True,
+                        },
+                    )
+                    Service.objects.select_for_update().filter(
+                        pk=locked.service_id,
+                        task_id=task_id,
+                        status__in=(
+                            SERVICE_STATUS_CHOICES.QUEUED,
+                            SERVICE_STATUS_CHOICES.DEPLOYING,
+                        ),
+                    ).update(
+                        status=SERVICE_STATUS_CHOICES.FAILED,
+                        task_id=None,
+                        deploy_started=None,
+                        updated_at=timezone.now(),
+                    )
+                    if locked.previous_deploy_id:
+                        Deploy.objects.filter(pk=locked.previous_deploy_id).update(
+                            rollback_status="failed",
+                            updated_at=timezone.now(),
+                        )
+        except Exception:
+            logger.exception("Could not terminalize failed rollback attempt=%s.", deployment_id)
+        raise
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=10)
