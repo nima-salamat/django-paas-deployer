@@ -1279,7 +1279,11 @@ class DeployViewSet(ModelViewSet):
                     )
 
                 env_update = updates.get("env")
-                if isinstance(env_update, dict) and platform not in {"mysql", "mariadb"}:
+                if isinstance(env_update, dict):
+                    # Credential changes must use the engine's explicit
+                    # top-level reconciliation contract. Arbitrary env keys
+                    # such as MYSQL_ROOT_PASSWORD or DATABASE_URL must not
+                    # bypass that contract.
                     sensitive_env_tokens = (
                         "password", "secret", "token", "database_url",
                         "connection", "dsn", "credential",
