@@ -1177,9 +1177,10 @@ class StateManager:
                 or str(deploy.error_message or "").strip()
                 or "Deployment cancelled by the user."
             )[:500]
-            payload = {
-                "event_id": str(uuid.uuid4()),
-                "trace_id": str(deploy_id),
+            payload = dict(event_payload or {})
+            payload.update({
+                "event_id": str(payload.get("event_id") or uuid.uuid4()),
+                "trace_id": str(payload.get("trace_id") or deploy_id),
                 "deployment_id": str(deploy_id),
                 "service_id": str(deploy.service_id),
                 "revision_id": str(deploy.revision_id or ""),
@@ -1189,8 +1190,11 @@ class StateManager:
                 "level": "warning",
                 "message": cancellation_message,
                 "progress": 100,
-                "details": {"cancellation_won_retry_race": True},
-            }
+                "details": {
+                    **dict(payload.get("details") or {}),
+                    "cancellation_won_retry_race": True,
+                },
+            })
             # Reuse the same owned terminal transition as ordinary cancellation
             # so Service.status/desired_state are projected atomically as well.
             return cls.transition_deploy_if_owned(
