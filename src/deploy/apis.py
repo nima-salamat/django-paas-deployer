@@ -1,5 +1,6 @@
 # deploy/apis.py
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -717,6 +718,40 @@ class DeployViewSet(ModelViewSet):
 
                 generation = bump_lifecycle(service.pk, desired_state="running")
                 now = timezone.now()
+
+                # Release is immutable, including its previous_release pointer.
+                # Re-activating the historical target Release directly would
+                # preserve its old parent and break the chronological rollback
+                # chain on the next rollback. Create a new immutable Release
+                # identity that reuses the target artifact/spec but points to
+                # the release that is active immediately before this rollback.
+                rollback_release_id = hashlib.sha256(
+                    (
+                        f"rollback:{task_id}:"
+                        f"{target_release.identity_fingerprint}:"
+                        f"{current_release.pk}"
+                    ).encode("utf-8")
+                ).hexdigest()
+                rollback_release = Release.objects.create(
+                    service=service,
+                    revision=target_release.revision,
+                    artifact=target_release.artifact,
+                    identity_fingerprint=rollback_release_id,
+                    runtime_spec=dict(target_release.runtime_spec or {}),
+                    rollout_policy=dict(target_release.rollout_policy or {}),
+                    health_policy=dict(target_release.health_policy or {}),
+                    release_command=dict(target_release.release_command or {}),
+                    previous_release=current_release,
+                    status="ready",
+                    provenance={
+                        **dict(target_release.provenance or {}),
+                        "rollback_operation_id": str(task_id),
+                        "restores_release_id": str(target_release.pk),
+                        "rollback_previous_release_id": str(current_release.pk),
+                    },
+                    created_by=request.user,
+                )
+
                 rollback_deploy = Deploy.objects.create(
                     name=f"rollback-{uuid4().hex[:12]}",
                     service=service,
@@ -731,7 +766,7 @@ class DeployViewSet(ModelViewSet):
                     rollback_status="pending",
                     execution_task_id=str(task_id),
                     previous_deploy=active_deploy,
-                    release_reference=target_release,
+                    release_reference=rollback_release,
                     artifact=target_release.artifact,
                     image_ref=target_release.artifact.image_ref,
                     image_digest=target_release.artifact.digest,
@@ -740,13 +775,14 @@ class DeployViewSet(ModelViewSet):
                     source_revision=str((target_release.provenance or {}).get("source_digest") or ""),
                     operation="rollback",
                     operation_started_at=now,
-                    operation_resource_id=str(target_release.pk),
+                    operation_resource_id=str(rollback_release.pk),
                     operation_previous_resource_id=str(current_release.pk),
                     recovery_metadata={
                         "expected_lifecycle_generation": int(generation),
                         "expected_previous_deploy_id": str(active_deploy.pk),
                         "expected_active_revision_id": str(service.active_revision_id or ""),
-                        "target_release_id": str(target_release.pk),
+                        "target_release_id": str(rollback_release.pk),
+                        "restores_release_id": str(target_release.pk),
                     },
                 )
 
@@ -805,7 +841,8 @@ class DeployViewSet(ModelViewSet):
                 "detail": _("Rollback queued."),
                 "task_id": str(task_id),
                 "deployment_id": rollback_deploy_id,
-                "target_release_id": str(target_release.pk),
+                "target_release_id": str(rollback_release.pk),
+                "restores_release_id": str(target_release.pk),
             },
             status=status.HTTP_202_ACCEPTED,
         )
