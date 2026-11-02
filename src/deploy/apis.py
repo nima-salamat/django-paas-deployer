@@ -671,31 +671,36 @@ class DeployViewSet(ModelViewSet):
                     )
                     .get(pk=active_deploy.pk)
                 )
-                current_release = active_deploy.release_reference
-                if current_release is None:
-                    current_release = (
-                        Release.objects.select_for_update()
-                        .filter(
-                            service_id=service.pk,
-                            revision_id=active_deploy.revision_id,
-                            status="promoted",
-                        )
-                        .select_related("revision", "artifact", "previous_release")
-                        .order_by("-promoted_at", "-created_at")
-                        .first()
+                active_revision_id = str(
+                    getattr(service, "active_revision_id", None)
+                    or active_deploy.revision_id
+                    or ""
+                )
+                current_release = (
+                    Release.objects.select_for_update()
+                    .filter(
+                        service_id=service.pk,
+                        revision_id=active_revision_id,
+                        status="promoted",
                     )
-                else:
-                    current_release = (
-                        Release.objects.select_for_update()
-                        .select_related(
-                            "revision",
-                            "artifact",
-                            "previous_release",
-                            "previous_release__revision",
-                            "previous_release__artifact",
-                        )
-                        .get(pk=current_release.pk)
+                    .select_related(
+                        "revision",
+                        "artifact",
+                        "previous_release",
+                        "previous_release__revision",
+                        "previous_release__artifact",
                     )
+                    .order_by("-promoted_at", "-created_at")
+                    .first()
+                )
+                # Compatibility bridge for services that predate the Release
+                # registry. Never prefer a historical relation if it is retired.
+                if (
+                    current_release is None
+                    and getattr(active_deploy, "release_reference_id", None)
+                    and active_deploy.release_reference.status == "promoted"
+                ):
+                    current_release = active_deploy.release_reference
 
                 target_release = getattr(current_release, "previous_release", None)
                 if (
