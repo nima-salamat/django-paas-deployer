@@ -1306,10 +1306,10 @@ class DeployViewSet(ModelViewSet):
                                 found.extend(_sensitive_env_paths(item, f"{prefix}[{index}]"))
                         elif isinstance(value, str):
                             if re.search(
-                                r"(?i)\\b(?:password|passwd|pwd)\\s*=\\s*[^;\\s]+",
+                                r"(?i)\b(?:password|passwd|pwd)\s*=\s*[^;\s]+",
                                 value,
                             ) or re.search(
-                                r"(?i)[a-z][a-z0-9+.-]*://[^\\s/:@]+:[^\\s/@]+@",
+                                r"(?i)[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@",
                                 value,
                             ):
                                 found.append(prefix)
