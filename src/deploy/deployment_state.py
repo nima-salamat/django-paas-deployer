@@ -324,6 +324,23 @@ class DjangoDeploymentState:
                     or retry_message
                 ),
                 stage="retry_pending",
+                update_fields={
+                    "reconciliation_required": bool(result_details.get("reconciliation_required")),
+                    "cleanup_status": (
+                        "critical"
+                        if any(
+                            isinstance(item, dict)
+                            and str(item.get("severity") or "").lower() == "critical"
+                            for item in (result_details.get("cleanup_failures") or [])
+                        )
+                        else (
+                            "degraded"
+                            if result_details.get("cleanup_failures")
+                            else "clean"
+                        )
+                    ),
+                    "cleanup_failures": list(result_details.get("cleanup_failures") or []),
+                },
                 event_payload={
                     "trace_id": self.events._trace_id(),
                     "details": {
