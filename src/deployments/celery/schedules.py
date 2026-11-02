@@ -1517,23 +1517,33 @@ def _native_reconciliation_plan(
 ):
     if deploy is None or not getattr(deploy, "revision_id", None):
         return None
-    release = getattr(deploy, "release_reference", None)
-    if release is None:
-        try:
-            from deploy.models import Release
-            release = (
-                Release.objects
-                .filter(
-                    service_id=service.pk,
-                    revision_id=deploy.revision_id,
-                    status="promoted",
-                )
-                .select_related("artifact", "revision")
-                .order_by("-promoted_at", "-created_at")
-                .first()
+    release = None
+    try:
+        from deploy.models import Release
+        # active_revision is the authority, not the historical Release FK on
+        # revision.source_deploy. A Rollback creates a new immutable Release
+        # for the same revision and retires the prior release; reconciliation
+        # must always use the most recently promoted artifact/runtime spec.
+        release = (
+            Release.objects
+            .filter(
+                service_id=service.pk,
+                revision_id=deploy.revision_id,
+                status="promoted",
             )
-        except Exception:
-            release = None
+            .select_related("artifact", "revision")
+            .order_by("-promoted_at", "-created_at")
+            .first()
+        )
+    except Exception:
+        release = None
+    if release is None:
+        historical_release = getattr(deploy, "release_reference", None)
+        if (
+            historical_release is not None
+            and str(getattr(historical_release, "status", "")).lower() == "promoted"
+        ):
+            release = historical_release
     revision = getattr(service, "active_revision", None) or getattr(deploy, "revision", None)
     if revision is None:
         return None
