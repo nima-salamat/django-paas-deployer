@@ -40,9 +40,9 @@ Root mounts are `/users/` and `/api/users/`. Customer endpoints use SessionJWTAu
 |---|---|---|---|
 | GET | `/users/admin/permissions/`, `/api/users/admin/permissions/` | AdminPermissionCatalogAPIView | Lists the permission/rule catalogue available to the admin UI. |
 | GET | `/users/admin/me/permissions/`, `/api/users/admin/me/permissions/` | MePermissionsAPIView | Returns the authenticated administrator's effective permission set. |
-| GET | `/users/admin/users/`, `/api/users/admin/users/` | AdminUserListAPIView | Lists users within the administrator's user-management permission boundary. |
-| GET, PUT, PATCH, DELETE | `/users/admin/users/<int:pk>/`, `/api/users/admin/users/<int:pk>/` | AdminUserDetailAPIView | Reads, updates or deletes one target user under admin rules. |
-| GET, POST, PATCH | `/users/admin/users/<int:pk>/rules/`, `/api/users/admin/users/<int:pk>/rules/` | AdminUserRulesAPIView | Reads and changes a user's assigned permission rules. |
+| GET, POST | `/users/admin/users/`, `/api/users/admin/users/` | AdminUserListAPIView | Lists users with filters/pagination or creates a new user. Creation is scope-dependent: users.create can create only a basic non-staff account; users.manage can manage staff/rules and only a superuser can create another superuser. |
+| GET, PATCH, DELETE | `/users/admin/users/<int:pk>/`, `/api/users/admin/users/<int:pk>/` | AdminUserDetailAPIView | Reads a target user, updates permitted fields/rules, or deactivates the account. Hard deletion is superuser-only and asynchronous with `?hard=1`; there is no PUT handler. |
+| PUT | `/users/admin/users/<int:pk>/rules/`, `/api/users/admin/users/<int:pk>/rules/` | AdminUserRulesAPIView | Replaces the target user's rules with the submitted `rules` array after validating that the caller is allowed to grant every requested rule. This endpoint has no GET, POST or PATCH handler. |
 | GET | `/users/admin/users/<int:pk>/sessions/`, `/api/users/admin/users/<int:pk>/sessions/` | AdminUserSessionListAPIView | Lists a target user's sessions under auth_sessions.view/manage. |
 | POST | `/users/admin/users/<int:pk>/sessions/logout-all/`, `/api/users/admin/users/<int:pk>/sessions/logout-all/` | AdminUserSessionLogoutAllAPIView | Revokes all eligible sessions for the target user. |
 | DELETE | `/users/admin/users/<int:pk>/sessions/<str:session_id>/`, `/api/users/admin/users/<int:pk>/sessions/<str:session_id>/` | AdminUserSessionRevokeAPIView | Revokes one target user's session. |
