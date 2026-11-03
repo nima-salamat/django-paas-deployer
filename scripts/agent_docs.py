@@ -133,6 +133,19 @@ def docs_index() -> list[dict]:
     return results
 
 
+def is_abstract_model(node: ast.ClassDef) -> bool:
+    for child in node.body:
+        if not isinstance(child, ast.ClassDef) or child.name != "Meta":
+            continue
+        for statement in child.body:
+            if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+            if any(isinstance(target, ast.Name) and target.id == "abstract" for target in targets):
+                return isinstance(statement.value, ast.Constant) and statement.value.value is True
+    return False
+
+
 def model_inventory() -> tuple[list[dict], dict[str, list[dict]]]:
     all_models = []
     per_app: dict[str, list[dict]] = defaultdict(list)
@@ -164,10 +177,15 @@ def model_inventory() -> tuple[list[dict], dict[str, list[dict]]]:
                     continue
                 field_names.extend(target.id for target in targets if isinstance(target, ast.Name))
             doc = ast.get_docstring(node) or "Django model."
+            abstract = is_abstract_model(node)
             item = {
                 "kind": "model", "title": node.name, "path": rel(path),
                 "line": node.lineno, "app": app, "source": True,
-                "summary": doc + "\nDeclared fields: " + (", ".join(field_names) or "(no direct fields)"),
+                "abstract": abstract,
+                "summary": (
+                    ("Abstract Django model/mixin. " if abstract else "Persisted Django model. ")
+                    + doc + "\nDeclared fields: " + (", ".join(field_names) or "(no direct fields)")
+                ),
             }
             all_models.append(item)
             per_app[app].append(item)
@@ -342,6 +360,10 @@ def audit() -> dict:
         }
         missing_models.extend({"app": app, "model": name, "documentation": rel(doc_path)} for name in missing)
 
+    abstract_models = [
+        {"app": item["app"], "model": item["title"], "path": item["path"], "line": item["line"]}
+        for item in models if item.get("abstract")
+    ]
     routes = route_inventory()
     route_apps = sorted({x["app"] for x in routes if x["app"]})
     missing_guides = []
@@ -352,6 +374,9 @@ def audit() -> dict:
     return {
         "repository": "nima-salamat/django-paas-deployer",
         "models_discovered": len(models),
+        "persisted_models_discovered": len(models) - len(abstract_models),
+        "abstract_models_discovered": len(abstract_models),
+        "abstract_models": abstract_models,
         "model_coverage": model_coverage,
         "models_missing_from_docs": missing_models,
         "static_routes_discovered": len(routes),
@@ -397,7 +422,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.as_json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
-        print(f"Models found: {report['models_discovered']}")
+        print(
+            f"Model classes found: {report['models_discovered']} "
+            f"({report['persisted_models_discovered']} persisted, "
+            f"{report['abstract_models_discovered']} abstract)"
+        )
         print(f"Static URL/router entries found: {report['static_routes_discovered']}")
         print("Model documentation gaps:")
         for item in report["models_missing_from_docs"]:
