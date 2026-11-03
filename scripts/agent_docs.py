@@ -305,6 +305,12 @@ def score(entry: dict, query: str) -> float:
         score_value += 8
     if query.casefold() in entry["title"].casefold():
         score_value += 5
+    # Exact literal searches (especially endpoint paths with placeholders)
+    # should surface the owning guide alongside the source route, even when
+    # the matching route appears late in a long documentation matrix.
+    full_text = entry.get("search_text") or entry["summary"]
+    if query.casefold() in full_text.casefold():
+        score_value += 50
     return score_value
 
 
