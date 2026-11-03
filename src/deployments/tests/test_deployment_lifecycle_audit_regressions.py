@@ -786,3 +786,26 @@ def test_deployment_intent_migration_backfills_and_retains_outbox_events():
     assert "expected_active_revision_id" in migration
     assert "worker_recovery_attempts" in migration
     assert "on_delete=django.db.models.deletion.SET_NULL" in migration
+
+
+
+def test_deployment_intent_schema_repair_is_idempotent_and_backfills_missing_values():
+    migration = (
+        ROOT
+        / "deploy/migrations/0035_repair_missing_deploy_intent_columns.py"
+    ).read_text(encoding="utf-8")
+
+    assert "get_table_description" in migration
+    assert "schema_editor.add_field" in migration
+    assert "expected_lifecycle_generation" in migration
+    assert "expected_active_revision_id" in migration
+    assert "worker_recovery_attempts" in migration
+    assert "bulk_update" in migration
+
+
+def test_developer_shell_consumer_imports_posixpath_for_relative_cd():
+    consumer = (ROOT / "services/consumers.py").read_text(encoding="utf-8")
+
+    assert "import posixpath" in consumer
+    assert "posixpath.join(self.session.workdir, target)" in consumer
+    assert "posixpath.normpath(candidate)" in consumer
