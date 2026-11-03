@@ -118,3 +118,117 @@ def test_tenant_and_admin_force_rebuild_paths_fail_closed_on_teardown_error():
 
     assert "start_service force_rebuild teardown warning" not in runtime_api
     assert "start_service force_rebuild teardown warning" not in admin_api
+
+
+@pytest.mark.django_db
+def test_teardown_failure_marks_service_stopped_and_deploy_for_reconciliation():
+    from core.global_settings.config import PlanTypeChoices, StorageTypeChoices
+    from deploy.models import Deploy, DeploymentStatusChoices
+    from plans.models import Plan
+    from services.models import PrivateNetwork, Service
+    from users.models import User
+
+    user = User.objects.create_user(
+        username="force-rebuild-failure",
+        email="force-rebuild-failure@example.invalid",
+    )
+    plan = Plan.objects.create(
+        name="Force rebuild fixture",
+        platform="docker",
+        plan_type=PlanTypeChoices.APP,
+        max_cpu=1.0,
+        max_ram=512,
+        max_storage=10,
+        price_per_hour=0,
+        storage_type=StorageTypeChoices.SSD,
+    )
+    network = PrivateNetwork.objects.create(
+        name="force-rebuild-failure-network",
+        user=user,
+    )
+    service = Service.objects.create(
+        name="force-rebuild-failure-service",
+        user=user,
+        plan=plan,
+        network=network,
+        status="running",
+        desired_state="running",
+    )
+    Service.objects.filter(pk=service.pk).update(lifecycle_generation=8)
+    deploy = Deploy.objects.create(
+        name="force-rebuild-failure-deploy",
+        service=service,
+        created_by=user,
+        status=DeploymentStatusChoices.SUCCEEDED,
+    )
+
+    rebuild.record_force_rebuild_teardown_failure(
+        service.pk,
+        deploy.pk,
+        expected_generation=8,
+        error="Swarm removal timed out",
+    )
+
+    service.refresh_from_db()
+    deploy.refresh_from_db()
+    assert service.status == "failed"
+    assert service.desired_state == "stopped"
+    assert service.task_id in (None, "")
+    assert deploy.reconciliation_required is True
+    assert deploy.cleanup_status == "pending"
+    assert deploy.cleanup_failures == [
+        "Force-rebuild teardown failed: Swarm removal timed out"
+    ]
+
+
+@pytest.mark.django_db
+def test_new_deploy_captures_ready_app_lifecycle_generation_and_active_revision():
+    from core.global_settings.config import PlanTypeChoices, StorageTypeChoices
+    from deploy.models import Deploy
+    from plans.models import Plan
+    from services.models import PrivateNetwork, Service, ServiceRevision
+    from users.models import User
+
+    user = User.objects.create_user(
+        username="ready-app-generation-capture",
+        email="ready-app-generation-capture@example.invalid",
+    )
+    plan = Plan.objects.create(
+        name="Ready App generation fixture",
+        platform="docker",
+        plan_type=PlanTypeChoices.APP,
+        max_cpu=1.0,
+        max_ram=512,
+        max_storage=10,
+        price_per_hour=0,
+        storage_type=StorageTypeChoices.SSD,
+    )
+    network = PrivateNetwork.objects.create(
+        name="ready-app-generation-network",
+        user=user,
+    )
+    service = Service.objects.create(
+        name="ready-app-generation-service",
+        user=user,
+        plan=plan,
+        network=network,
+        status="stopped",
+        desired_state="stopped",
+    )
+    Service.objects.filter(pk=service.pk).update(lifecycle_generation=31)
+    revision = ServiceRevision.objects.create(
+        service=service,
+        revision_number=1,
+        config_snapshot={},
+    )
+    Service.objects.filter(pk=service.pk).update(active_revision=revision)
+    service.refresh_from_db(fields=["lifecycle_generation", "active_revision"])
+
+    deploy = Deploy.objects.create(
+        name="ready-app-generation-deploy",
+        service=service,
+        created_by=user,
+    )
+
+    assert deploy.expected_lifecycle_generation == 31
+    assert deploy.expected_active_revision_id == str(revision.pk)
