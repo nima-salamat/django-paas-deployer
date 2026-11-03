@@ -24,7 +24,7 @@ The endpoint should be understood as a chain, not just a URL. Authentication doe
 | agent | `/agent/v1/` | [agent API](../apps/agent/api.md) |
 | app_catalog | `/api/application-catalog/` | [app_catalog API](../apps/app_catalog/api.md) |
 | auth_users | `/auth/` | [auth_users API](../apps/auth_users/api.md) |
-| services | `/services/`, plus `/api/networks/` and `/api/volumes/` aliases | [services API](../apps/services/api.md) |
+| services | `/services/`, `/api/networks/` and `/api/volumes/` aliases; direct legacy alias `POST /api/services/service_status/` | [services API](../apps/services/api.md) |
 | deploy | deployment/admin API | [deploy API](../apps/deploy/api.md) |
 | plans | plan/admin API | [plans API](../apps/plans/api.md) |
 | users | user/profile/admin API | [users API](../apps/users/api.md) |
