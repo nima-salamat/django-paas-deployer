@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 DOCS = ROOT / "documentation"
 WORD = re.compile(r"[^\W_]+|_[a-z0-9_]+", re.IGNORECASE)
-MODEL_BASES = {"Model", "BaseModel", "AbstractBaseUser", "AbstractUser", "Page", "BaseGenericSetting"}
+MODEL_BASES = {"Model", "BaseModel", "AbstractBaseUser", "AbstractUser", "Page", "BaseGenericSetting", "ClusterableModel", "Orderable"}
 
 
 def read(path: Path) -> str:
