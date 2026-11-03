@@ -39,9 +39,7 @@ AgentPage collection endpoints accept page and page_size. Default page size is 2
 
 ## Complete endpoint matrix
 
-The route matrix below is generated from the centralized `src/agent/contracts.py` contract list. `scopes` are cumulative requirements; `any_scopes` is an alternative set where at least one listed scope must be granted. These metadata fields do not replace the existing User/ServiceShare object-level permission checks.
-
-| Contracts in the next table are read from `src/agent/contracts.py`. `Required scopes (all)` must all be granted. `Any-of scopes` is an alternative set: at least one listed scope is required when this column is populated. The Purpose column explains the operation; request/response schemas and edge-case semantics remain in the sections below and in the implementation.
+The route paths and scope/mutation/throttle metadata below are derived from the centralized `src/agent/contracts.py` contract list. `Required scopes (all)` are cumulative; `Any-of scopes` is an alternative set where at least one listed scope must be granted. These Agent scopes do not replace the existing User/ServiceShare object-level permission checks. The Purpose column describes the operation; request/response schemas and edge cases are explained below and enforced by the implementation.
 
 | Method | Endpoint | Purpose | Path parameters | Required scopes (all) | Any-of scopes | Mutating | Idempotent | Throttle |
 |---|---|---|---|---|---|---|---|---|
