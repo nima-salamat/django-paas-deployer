@@ -209,6 +209,7 @@ def start_service_apiview(request):
     )
     share = None
     task_id = None
+    teardown_error = None
 
     try:
         with transaction.atomic():
@@ -417,95 +418,112 @@ def start_service_apiview(request):
                 cfg["platform"] = platform
                 Deploy.objects.filter(pk=deploy_item.pk).update(config=cfg)
 
-            if force_rebuild:
+            from services.lifecycle.rebuild import (
+                fence_and_teardown_service_runtime,
+                record_force_rebuild_teardown_failure,
+            )
+            from services.lifecycle import bump_lifecycle
 
+            if force_rebuild:
                 from deploy.daily_limits import assert_daily_deploy_allowed
-                ok_lim, lim_msg, used, limit = assert_daily_deploy_allowed(service_item, request.user)
+
+                ok_lim, lim_msg, used, limit = assert_daily_deploy_allowed(
+                    service_item, request.user
+                )
                 if not ok_lim:
                     return Response(
                         {"result": "error", "detail": lim_msg, "used": used, "limit": limit},
                         status=status.HTTP_429_TOO_MANY_REQUESTS,
                     )
-                container_name = service_item.get_docker_service_name()
-                try:
-                    if is_db:
-                        DBDeployer().remove(container_name)
-                    elif swarm_enabled():
-                        SwarmRuntime().remove_service_group(str(service_item.pk))
-                    else:
-                        OrchestratorDeploy.remove_all(container_name)
-                except Exception as exc:
-                    logger.warning(
-                        "start_service force_rebuild teardown warning "
-                        "for service '%s': %s",
-                        service_id,
-                        exc,
-                    )
+                lifecycle_generation, teardown_error = fence_and_teardown_service_runtime(
+                    service_item,
+                    platform=platform,
+                )
+            else:
+                lifecycle_generation = bump_lifecycle(
+                    service_item.pk,
+                    desired_state="running",
+                )
 
-            from services.lifecycle import bump_lifecycle
-            lifecycle_generation = bump_lifecycle(service_item.pk, desired_state="running")
             service_item.desired_state = "running"
             service_item.lifecycle_generation = lifecycle_generation
 
-            task_id = make_uuid4()
-            service_item.status = SERVICE_STATUS_CHOICES.QUEUED
-            service_item.deploy_started = timezone.now()
-            service_item.task_id = task_id
-            service_item.save(update_fields=[
-                "status", "deploy_started", "task_id",
-                "desired_state", "lifecycle_generation",
-            ])
-            transaction.on_commit(
-                lambda sid=service_item.pk: _sync_ready_app_parent_status(sid)
-            )
+            if teardown_error is not None:
+                # The generation bump is intentionally committed even when
+                # runtime teardown failed. Do not publish a replacement task:
+                # it would race a runtime whose ownership/removal is uncertain.
+                record_force_rebuild_teardown_failure(
+                    service_item.pk,
+                    deploy_item.pk,
+                    expected_generation=lifecycle_generation,
+                    error=teardown_error,
+                )
+                transaction.on_commit(
+                    lambda sid=service_item.pk: _sync_ready_app_parent_status(sid)
+                )
+                transaction.on_commit(
+                    lambda: _invalidate_service_cache_soft(request.user.pk)
+                )
+            else:
+                task_id = make_uuid4()
+                service_item.status = SERVICE_STATUS_CHOICES.QUEUED
+                service_item.deploy_started = timezone.now()
+                service_item.task_id = task_id
+                service_item.save(update_fields=[
+                    "status", "deploy_started", "task_id",
+                    "desired_state", "lifecycle_generation",
+                ])
+                transaction.on_commit(
+                    lambda sid=service_item.pk: _sync_ready_app_parent_status(sid)
+                )
 
-            Deploy.objects.filter(pk=deploy_item.pk).update(
-                status="pending",
-                stage="queued",
-                progress=0,
-                status_message="Rebuild queued."
-                if force_rebuild
-                else "Deployment queued.",
-                error_message="",
-                cancel_requested=False,
-                expected_lifecycle_generation=lifecycle_generation,
-                expected_active_revision_id=str(service_item.active_revision_id or ""),
-                worker_recovery_attempts=0,
-            )
+                Deploy.objects.filter(pk=deploy_item.pk).update(
+                    status="pending",
+                    stage="queued",
+                    progress=0,
+                    status_message="Rebuild queued."
+                    if force_rebuild
+                    else "Deployment queued.",
+                    error_message="",
+                    cancel_requested=False,
+                    expected_lifecycle_generation=lifecycle_generation,
+                    expected_active_revision_id=str(service_item.active_revision_id or ""),
+                    worker_recovery_attempts=0,
+                )
 
-            def _enqueue_after_commit() -> None:
-                # Publish only after the transaction is durable. Celery itself is
-                # configured with publish retries; this callback adds a bounded
-                # application-level retry for transient Redis connection failures.
-                task = run_db_deploy if is_db else start_service
-                try:
-                    task.apply_async(
-                        args=[str(deploy_item.id)],
-                        task_id=task_id,
-                        retry=True,
-                        retry_policy={
-                            "max_retries": 5,
-                            "interval_start": 0,
-                            "interval_step": 0.5,
-                            "interval_max": 3,
-                        },
-                    )
-                    logger.info(
-                        "Celery task published deploy=%s service=%s task_id=%s broker=%s",
-                        deploy_item.id, service_id, task_id,
-                        getattr(settings, "CELERY_BROKER_URL", "unknown"),
-                    )
-                except Exception:
-                    logger.exception(
-                        "Celery enqueue failed after commit for deploy=%s service=%s; "
-                        "leaving operation queued for monitor retry",
-                        deploy_item.id, service_id,
-                    )
+                def _enqueue_after_commit() -> None:
+                    # Publish only after the transaction is durable. Celery itself is
+                    # configured with publish retries; this callback adds a bounded
+                    # application-level retry for transient Redis connection failures.
+                    task = run_db_deploy if is_db else start_service
+                    try:
+                        task.apply_async(
+                            args=[str(deploy_item.id)],
+                            task_id=task_id,
+                            retry=True,
+                            retry_policy={
+                                "max_retries": 5,
+                                "interval_start": 0,
+                                "interval_step": 0.5,
+                                "interval_max": 3,
+                            },
+                        )
+                        logger.info(
+                            "Celery task published deploy=%s service=%s task_id=%s broker=%s",
+                            deploy_item.id, service_id, task_id,
+                            getattr(settings, "CELERY_BROKER_URL", "unknown"),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Celery enqueue failed after commit for deploy=%s service=%s; "
+                            "leaving operation queued for monitor retry",
+                            deploy_item.id, service_id,
+                        )
 
-            transaction.on_commit(_enqueue_after_commit)
-            transaction.on_commit(
-                lambda: _invalidate_service_cache_soft(request.user.pk)
-            )
+                transaction.on_commit(_enqueue_after_commit)
+                transaction.on_commit(
+                    lambda: _invalidate_service_cache_soft(request.user.pk)
+                )
 
     except Service.DoesNotExist:
         return Response(
