@@ -172,10 +172,10 @@ These are additional HTTP mounts that must not be confused with the shorter rout
 | POST | `/api/users/set-password/` |
 | POST | `/api/users/change-password/` |
 | DELETE | `/api/users/remove-password/` |
-| GET/POST | `/api/users/admin/tables/` |
+| GET | `/api/users/admin/tables/` |
 | GET | `/api/users/admin/tables/{model_key}/` |
 | GET | `/api/users/admin/tables/{model_key}/fk-search/` |
-| GET/PATCH/DELETE | `/api/users/admin/tables/{model_key}/{pk}/` |
+| GET/DELETE | `/api/users/admin/tables/{model_key}/{pk}/` |
 | GET/POST | `/api/users/admin/users/{pk}/profiles/` |
 | POST | `/api/users/admin/users/{pk}/profiles/reorder/` |
 | PATCH/DELETE | `/api/users/admin/users/{pk}/profiles/{profile_id}/` |
