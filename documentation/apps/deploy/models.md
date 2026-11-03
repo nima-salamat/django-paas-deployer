@@ -164,20 +164,15 @@ JSON fields are structured contracts. Do not introduce keys by observation from 
 **Do not assume:** a Django field being writable at the ORM level means any API or worker is allowed to mutate it. Workflow ownership and invariants in the app documentation control safe writes.
 
 
-## Build cache governance models
+## BuildCacheArtifact
 
-`src/deploy/models.py::BuildCacheArtifact` records one logical application
-image artifact with its User, Service and Deploy ownership, image identity,
-size, last-use timestamp, protection flag and reclamation state.
+One logical application image artifact with User, Service and Deploy ownership, image identity, size, last-use timestamp, protection flag and reclamation state. It is the tenant-accounting record for a built image; it is not the immutable build identity (that is `BuildArtifact`) and it is not a physical BuildKit layer. Reclamation must protect images still referenced by a live Deploy, Release, runtime or another service.
 
-`src/deploy/models.py::BuildCacheQuota` stores an operator override owned by
-exactly one User or exactly one Service. Quota, retention and protected
-successful-deployment count are optional and inherit the global build-cache
-policy when left unset.
+## BuildCacheQuota
 
-The cache policy engine is implemented in `src/deploy/build_cache.py`.
-Physical Docker BuildKit storage is global; these models provide logical
-tenant accounting and safe application-image retention.
+Operator override owned by exactly one User or exactly one Service. Quota, retention and protected successful-deployment count are optional and inherit the global build-cache policy when left unset. The ownership constraint prevents one quota row from ambiguously representing both a user and one of that user's services.
+
+The cache policy engine is implemented in `src/deploy/build_cache.py`. Physical Docker BuildKit storage is global; these models provide logical tenant accounting and safe application-image retention.
 
 > **Complete field reference:** [field-reference.md](field-reference.md) lists every field explicitly declared in `src/deploy/models.py`, including type, null/blank behavior, defaults, constraints and purpose.
 
