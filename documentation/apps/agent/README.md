@@ -64,6 +64,19 @@ execution, and the service-scoped MCP Streamable HTTP interface. These views
 reuse the existing Agent authentication, scope contracts, managed file API,
 restricted shell, runtime tools, audit and idempotency boundaries.
 
+## Repository documentation lookup
+
+When an Agent is operating on a checked-out PassDeployer repository, use the repository-local lookup CLI before guessing which document or source file owns a feature:
+
+```bash
+python scripts/agent_docs.py search ServiceRevision --kind model --json
+python scripts/agent_docs.py search "/agent/v1/services/{service_id}/rebuild" --kind api --json
+python scripts/agent_docs.py search "runtime reconciliation" --kind system
+python scripts/agent_docs.py audit --json
+```
+
+The CLI searches documentation headings/body and statically indexed Django model and URL declarations. It returns repository-relative paths and line numbers where available. It is navigation only: use the API guide, serializer, permissions and tests to confirm behavior. Full usage, result schema and static-analysis limits are in [Agent documentation search](../../reference/agent-documentation-search.md).
+
 ## Contract references
 
 - [API reference](api.md)
