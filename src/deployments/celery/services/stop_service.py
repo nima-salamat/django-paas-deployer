@@ -25,7 +25,7 @@ from deployments.core.manager.container_manager import Container
 from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
-from deployments.common.exceptions import InvalidServiceStateError
+from deployments.common.exceptions import InvalidServiceStateError, StaleDeploymentWorkerError
 from services.models import Service
 from services.revisioning import get_active_deploy
 from deployments.infrastructure.django_runtime import DjangoRuntimeSelectionResolver
@@ -296,6 +296,50 @@ class StopService:
                         service_id=desired.service_id,
                         runtime_name=desired.runtime_name,
                     )
+
+                    def _journal_stop_resources(*, state, plan=None, handle=None, error=""):
+                        if active_deploy is None:
+                            return
+                        from deploy.models import DeploymentResource
+                        names = list(
+                            DeploymentResource.objects.filter(
+                                deployment_id=active_deploy.pk,
+                                kind="runtime_service",
+                            ).values_list("name", flat=True)
+                        )
+                        if not names and handle is not None and handle.resource_name:
+                            names = [str(handle.resource_name)]
+                        with transaction.atomic():
+                            current_service = Service.objects.select_for_update().filter(pk=service.pk).first()
+                            if (
+                                current_service is None
+                                or int(current_service.lifecycle_generation or 0) != int(generation)
+                                or str(current_service.active_revision_id or "") != str(desired.revision_id or "")
+                            ):
+                                raise StaleDeploymentWorkerError(
+                                    "Cannot journal stop resources after service lifecycle ownership changed."
+                                )
+                            for name in names:
+                                DeploymentResource.objects.update_or_create(
+                                    deployment_id=active_deploy.pk,
+                                    kind="runtime_service",
+                                    name=str(name)[:255],
+                                    defaults={
+                                        "runtime_id": str(
+                                            getattr(handle, "runtime_id", "") or ""
+                                        )[:255],
+                                        "state": str(state)[:32],
+                                        "owned": True,
+                                        "metadata": {
+                                            "source": "service_stop",
+                                            "service_id": str(service.pk),
+                                            "revision_id": str(desired.revision_id or ""),
+                                        },
+                                        "last_error": str(error or "")[:2000],
+                                        "retired_at": timezone.now() if state == "retired" else None,
+                                    },
+                                )
+
                     context = ReconciliationExecutionContext(
                         service_id=str(service.pk),
                         lifecycle_generation=generation,
@@ -306,8 +350,12 @@ class StopService:
                         current_generation=lambda sid=str(service.pk): Service.objects.filter(
                             pk=sid
                         ).values_list("lifecycle_generation", flat=True).first(),
+                        current_active_revision=lambda sid=str(service.pk): Service.objects.filter(
+                            pk=sid
+                        ).values_list("active_revision_id", flat=True).first(),
+                        journal_runtime_resources=_journal_stop_resources,
                     )
-                    ReconciliationExecutor().execute(
+                    stop_result = ReconciliationExecutor().execute(
                         decision,
                         desired=desired,
                         selection=selection,
@@ -315,6 +363,10 @@ class StopService:
                         context=context,
                         handle=handle,
                     )
+                    if stop_result is None or not stop_result.success:
+                        raise RuntimeError(
+                            "The runtime did not confirm the service stop operation."
+                        )
                     stopped = (
                         backend_runtime.wait_service_group_stopped(
                             str(service_id), timeout=30.0
@@ -327,6 +379,7 @@ class StopService:
                         raise TimeoutError(
                             f"Swarm service group {service_id} still has running tasks after the stop timeout."
                         )
+                    context.journal_resources("retired", handle=handle)
             else:
                 if Container.container_is_running(container_name):
                     logger.info("Dispatching stop request for container: %s", container_name)

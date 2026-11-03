@@ -454,6 +454,7 @@ CELERY_TASK_ROUTES = {
     "deployments.celery.tasks.deploy": {"queue": "deployments"},
     "deployments.celery.tasks.run_db_deploy": {"queue": "deployments"},
     "deployments.celery.tasks.stop": {"queue": "operations"},
+    "deployments.celery.tasks.force_cancel_deploy_cleanup": {"queue": "operations"},
     "deployments.celery.tasks.build_base_runtime_image": {"queue": "base-images"},
     "deployments.celery.tasks.reclaim_released_volumes": {"queue": "operations"},
     "deployments.celery.tasks.maintain_build_cache": {"queue": "operations"},
@@ -470,6 +471,7 @@ CELERY_TASK_ROUTES = {
 }
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_IMPORTS = (
     "deployments.celery.tasks",
     "agent.tasks",

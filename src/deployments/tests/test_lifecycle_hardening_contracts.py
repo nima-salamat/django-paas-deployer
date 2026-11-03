@@ -1,6 +1,8 @@
 """Regression contracts for lifecycle hardening changes."""
 
 from datetime import datetime, timedelta, timezone
+import ast
+from pathlib import Path
 
 from deployments.common.deadline import DeploymentDeadline
 from deployments.common.retry import classify_docker_exception
@@ -59,7 +61,7 @@ def test_failure_taxonomy_distinguishes_user_input_from_transient_infrastructure
     assert bad_config.retryability == Retryability.NEVER.value
 
     transient = DeploymentError("daemon unavailable", code="docker_daemon_unavailable", recoverable=True)
-    assert transient.failure_domain == FailureDomain.RUNTIME_APP.value
+    assert transient.failure_domain == FailureDomain.TRANSIENT_INFRA.value
     assert transient.retryability == Retryability.BACKOFF.value
 
 

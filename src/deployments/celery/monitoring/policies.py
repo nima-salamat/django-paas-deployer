@@ -54,6 +54,8 @@ ACTIVE_SERVICE_STATUSES: tuple = (
     "deploying",
     "running",
     "stopping",
+    # Reconcile failed projections against their authoritative desired state.
+    "failed",
     # Include succeeded so the monitor can upgrade old rows to running when
     # the container is actually up, and downgrade to failed when it is not.
     "succeeded",

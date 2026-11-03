@@ -72,6 +72,18 @@ Service desired state
 immutable release/provenance metadata and Deploy records one execution attempt;
 neither replaces the Service revision pointer.
 
+Each deployment persists the Service lifecycle generation and active revision
+that it observed when queued. Activation compares both values under locked
+Service/Deploy rows, so an older Start or a competing promotion cannot win by
+finishing later. Direct release selection only repairs the legacy selection
+projection for the revision already active; runtime changes go through deploy
+or rollback.
+
+Service deletion shares the lifecycle lock with runtime workers. Pre-delete
+cleanup holds a PostgreSQL transaction advisory lock through database commit,
+bumps the lifecycle generation to `deleted`, and removes only owned resources.
+A busy Service cannot be deleted while a worker still owns its session lock.
+
 The normal Swarm execution path does not construct `DeploymentOrchestrator` and
 does not require `DeploymentPlanCompatibilityCompiler` or `DeploymentConfig`
 as the semantic RuntimeContract input. Compatibility code remains isolated for

@@ -244,10 +244,21 @@ def delete_service_row_after_cleanup(service: Service) -> None:
 
 @receiver(pre_delete, sender=Service)
 def delete_deploy_before_delete_service(sender, instance: Service, **kwargs):
-    """Remove Docker resources before the Service row is deleted unless pre-cleaned."""
+    """Remove owned runtime resources under the Service lifecycle lock."""
     if getattr(instance, "_docker_cleanup_completed", False):
         return
-    cleanup_service_resources(instance)
+    from deployments.core.state.locks import acquire_service_deployment_transaction_lock
+    from services.lifecycle import bump_lifecycle
+
+    # The transaction-scoped lock conflicts with a worker's session lock and
+    # remains held until this Service deletion commits or rolls back. Bump the
+    # generation before cleanup so any worker that lost its DB session also
+    # fails its next lifecycle fence before another runtime side effect.
+    with acquire_service_deployment_transaction_lock(instance.pk):
+        generation = bump_lifecycle(instance.pk, desired_state="deleted")
+        instance.lifecycle_generation = generation
+        instance.desired_state = "deleted"
+        cleanup_service_resources(instance)
 
 def _cleanup_service_cache_images(service: Service) -> None:
     """Release all local images owned by a deleting Service, including native Swarm tags.

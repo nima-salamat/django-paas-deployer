@@ -63,6 +63,14 @@ The native Swarm execution path is production-facing; the remaining legacy facad
 
 Use for integrated contracts crossing state, lifecycle and runtime abstractions.
 
+**`test_deployment_lifecycle_audit_regressions.py`**
+
+Protects regressions for advisory-lock identity/session fencing, queued
+activation intent, cancellation versus activation, worker recovery bounds,
+resource journaling, terminal outbox retention, and reconciliation against a
+newer lifecycle generation. It also guards database deployment lock ordering
+and successful rollback projection repair.
+
 ## Planning/configuration contracts
 
 **`test_config.py` / `test_config_contract.py`**

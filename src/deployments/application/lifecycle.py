@@ -8,6 +8,7 @@ machine.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
 
@@ -25,6 +26,8 @@ from deployments.runtime.errors import (
     RuntimeUnavailableError,
     RuntimeUnsupportedError,
 )
+
+logger = logging.getLogger(__name__)
 
 from .context import DeploymentExecutionContext
 
@@ -87,6 +90,7 @@ class InMemoryLifecycleStore:
         self.status = status
         self.history: list[tuple[str, str]] = []
         self.details: dict[str, Any] = {}
+        self.last_activation_outcome: str | None = None
 
     def ensure_running(self, context: DeploymentExecutionContext) -> bool:
         if self.is_terminal():
@@ -109,6 +113,12 @@ class InMemoryLifecycleStore:
     ) -> bool:
         if not context.owns_execution():
             return False
+        self.last_activation_outcome = None
+        if target == sm.DEPLOY_SUCCEEDED:
+            if context.cancellation_requested():
+                self.last_activation_outcome = "cancelled"
+                return False
+            self.last_activation_outcome = "activated"
         # The final state writer re-checks cancellation while the transition
         # is serialized.  This is the pure equivalent of the DB CAS fence.
         if target != sm.DEPLOY_CANCELLED and context.cancellation_requested():
@@ -188,11 +198,12 @@ class DeploymentLifecycleExecutor:
             )
 
             context.emit("runtime_apply", "Applying the deployment plan.", progress=45)
+            self._journal_plan_resources(context, plan, state="planned")
             with deployment_span("runtime.apply", attributes={"deployment.id": context.deployment_id, "runtime.backend": runtime.backend}):
                 applied = runtime.apply(
                     plan,
                     operation_key=context.operation("apply"),
-                    cancel_check=context.cancellation_requested,
+                    cancel_check=context.runtime_cancel_check,
                 )
             handle = applied.handle
             if handle is None:
@@ -200,31 +211,12 @@ class DeploymentLifecycleExecutor:
                     "Runtime apply completed without returning a handle.",
                     code="runtime_handle_missing",
                 )
-            journal = getattr(self.store, "journal_runtime_resource", None)
-            if callable(journal):
-                service_names = tuple(handle.metadata.get("service_names") or ())
-                service_ids = dict(handle.metadata.get("service_ids") or {})
-                if not service_names:
-                    service_names = (handle.resource_name or handle.identity.resource_name(),)
-                for service_name in service_names:
-                    journal(
-                        context,
-                        kind="runtime_service",
-                        name=str(service_name),
-                        runtime_id=str(service_ids.get(service_name) or handle.runtime_id or ""),
-                        state="active",
-                        metadata={
-                            "operation_key": context.operation("apply"),
-                            "revision_id": str(context.revision_id or ""),
-                            "release_id": str(getattr(plan, "release_id", "") or ""),
-                            "artifact_digest": str(getattr(plan, "artifact_digest", "") or ""),
-                            "process": str(
-                                service_name.rsplit("-", 1)[-1]
-                                if service_name != handle.resource_name
-                                else getattr(handle.identity, "process_name", "web")
-                            ),
-                        },
-                    )
+            self._journal_plan_resources(
+                context,
+                plan,
+                state="created",
+                handle=handle,
+            )
             context.assert_can_continue()
 
             context.emit("readiness", "Waiting for runtime readiness.", progress=75)
@@ -232,9 +224,15 @@ class DeploymentLifecycleExecutor:
                 ready = runtime.wait_ready(
                     handle,
                     timeout=readiness_timeout,
-                    cancel_check=context.cancellation_requested,
+                    cancel_check=context.runtime_cancel_check,
                 )
             context.assert_can_continue()
+            self._journal_plan_resources(
+                context,
+                plan,
+                state="ready",
+                handle=handle,
+            )
 
             # Activation is the authority boundary. Do not destructively clean
             # previous-process resources before activation: a failed activation
@@ -250,7 +248,58 @@ class DeploymentLifecycleExecutor:
                 },
             )
             if not transitioned:
+                activation_outcome = getattr(self.store, "last_activation_outcome", None)
+                if activation_outcome == "cancelled":
+                    return self._finish_cancellation(
+                        context,
+                        runtime,
+                        plan,
+                        handle,
+                        DeploymentCancelled(
+                            "Deployment cancellation won immediately before activation.",
+                            stage="cancelled",
+                            user_message="Deployment cancelled by the user.",
+                            details={
+                                "deployment_id": context.deployment_id,
+                                "activation_outcome": "cancelled",
+                            },
+                        ),
+                    )
+                if activation_outcome == "activation_conflict":
+                    raise DeploymentError(
+                        "The active revision changed before this deployment could be committed.",
+                        code="deployment_activation_conflict",
+                        stage="activation",
+                        recoverable=False,
+                        user_message=(
+                            "The deployment finished starting, but a newer lifecycle change "
+                            "won the activation race. Runtime reconciliation was requested."
+                        ),
+                        details={
+                            "activation_outcome": activation_outcome,
+                            "reconciliation_required": True,
+                            "revision_id": str(context.revision_id or ""),
+                        },
+                    )
                 return self._stale_result(context, runtime_result=ready)
+
+            finalization: dict[str, Any] = {}
+            try:
+                self._journal_plan_resources(
+                    context,
+                    plan,
+                    state="active",
+                    handle=handle,
+                )
+            except Exception:
+                # Activation and its terminal outbox are already durable. A
+                # journal projection failure must be recovered from runtime labels.
+                finalization["reconciliation_required"] = True
+                finalization["journal_update_failed"] = True
+                logger.exception(
+                    "Could not mark runtime journal active for deployment %s.",
+                    context.deployment_id,
+                )
 
             # Cleanup is deliberately post-activation. A cleanup failure must
             # never turn an already-activated deployment into FAILED; instead
@@ -259,16 +308,20 @@ class DeploymentLifecycleExecutor:
             finalize = getattr(runtime, "finalize_success", None)
             if callable(finalize):
                 try:
-                    finalization = dict(
-                        finalize(
-                            handle,
-                            operation_key=context.operation("finalize"),
-                            cancel_check=context.cancellation_requested,
-                        )
-                        or {}
-                    )
+                    runtime_finalization = dict(finalize(
+                        handle,
+                        operation_key=context.operation("finalize"),
+                        cancel_check=context.runtime_cancel_check,
+                    ) or {})
+                    finalization = {
+                        **finalization,
+                        **runtime_finalization,
+                    }
+                    if finalization.get("journal_update_failed"):
+                        finalization["reconciliation_required"] = True
                 except Exception as finalize_exc:
                     finalization = {
+                        **finalization,
                         "cleanup_attempted": True,
                         "cleanup_failed": True,
                         "reconciliation_required": True,
@@ -286,6 +339,15 @@ class DeploymentLifecycleExecutor:
                         level="warning",
                         progress=100,
                         details=finalization,
+                    )
+            record_finalization = getattr(self.store, "record_finalization", None)
+            if callable(record_finalization):
+                try:
+                    record_finalization(context, finalization)
+                except Exception:
+                    logger.exception(
+                        "Could not persist post-activation cleanup result for deployment %s.",
+                        context.deployment_id,
                     )
             if self.store.status != sm.DEPLOY_SUCCEEDED:
                 context.assert_can_continue()
@@ -336,15 +398,44 @@ class DeploymentLifecycleExecutor:
                     DeploymentCancelled(exc.user_message, details=exc.details),
                 )
             error = exc if isinstance(exc, DeploymentError) else to_deployment_error(exc, stage="deployment_execution")
-            rollback_performed, rollback_failed, cleanup_details = self._recover_failure(
-                context,
-                runtime,
-                plan,
-                handle,
-                error.details,
-            )
+            activation_conflict = error.code == "deployment_activation_conflict"
+            if activation_conflict:
+                # The Runtime may now be shared with a newer authoritative
+                # revision. Leave it untouched and let reconciliation converge
+                # to Service.active_revision.
+                rollback_performed, rollback_failed, cleanup_details = (
+                    False,
+                    False,
+                    {"reconciliation_required": True, "cleanup_attempted": False},
+                )
+            else:
+                rollback_performed, rollback_failed, cleanup_details = self._recover_failure(
+                    context,
+                    runtime,
+                    plan,
+                    handle,
+                    error.details,
+                    readiness_timeout=readiness_timeout,
+                )
             cleanup_failed = bool(cleanup_details.get("cleanup_failed"))
             cleanup_performed = bool(cleanup_details.get("cleanup_attempted"))
+            try:
+                self._journal_plan_resources(
+                    context,
+                    plan,
+                    state=(
+                        "cleanup_pending"
+                        if cleanup_failed or activation_conflict
+                        else "retired"
+                    ),
+                    handle=handle,
+                    error=str(error.technical_message or error),
+                )
+            except Exception:
+                logger.exception(
+                    "Could not persist failed runtime resource journal for deployment %s.",
+                    context.deployment_id,
+                )
             transitioned = self.store.transition(
                 context,
                 sm.DEPLOY_FAILED,
@@ -357,7 +448,9 @@ class DeploymentLifecycleExecutor:
                     "rollback_failed": rollback_failed,
                     "cleanup_performed": cleanup_performed,
                     "cleanup_failed": cleanup_failed,
-                    "reconciliation_required": bool(rollback_failed or cleanup_failed),
+                    "reconciliation_required": bool(
+                        activation_conflict or rollback_failed or cleanup_failed
+                    ),
                     **cleanup_details,
                 },
             )
@@ -498,6 +591,62 @@ class DeploymentLifecycleExecutor:
             details={**details, **dict(stale_error.details or {})},
         )
 
+    def _journal_plan_resources(
+        self,
+        context: DeploymentExecutionContext,
+        plan: Any,
+        *,
+        state: str,
+        handle: RuntimeHandle | None = None,
+        error: str = "",
+    ) -> None:
+        journal = getattr(self.store, "journal_runtime_resource", None)
+        if not callable(journal) or plan is None:
+            return
+        identity = getattr(plan, "identity", None)
+        name_factory = getattr(identity, "resource_name", None)
+        base_name = str(name_factory() if callable(name_factory) else "").strip()
+        if not base_name:
+            return
+        runtime_options = dict(getattr(plan, "runtime_options", {}) or {})
+        process_specs = list(runtime_options.get("processes") or ())
+        if not process_specs:
+            process_specs = [{"name": "web", "enabled": True}]
+        metadata = dict(handle.metadata if handle is not None else {})
+        service_ids = dict(metadata.get("service_ids") or {})
+        known_names = set(metadata.get("service_names") or ())
+        for item in process_specs:
+            if not isinstance(item, Mapping) or item.get("enabled", True) is False:
+                continue
+            process_name = str(item.get("name") or "web").strip().lower()
+            resource_name = (
+                base_name if process_name == "web" else f"{base_name}-{process_name}"
+            )
+            if known_names and resource_name not in known_names:
+                continue
+            journal(
+                context,
+                kind="runtime_service",
+                name=resource_name,
+                runtime_id=str(
+                    service_ids.get(resource_name)
+                    or (metadata.get("runtime_id", "") if resource_name == base_name else "")
+                    or (handle.runtime_id if handle is not None and resource_name == base_name else "")
+                ),
+                state=state,
+                metadata={
+                    "operation_key": context.operation("apply"),
+                    "deployment_id": str(context.deployment_id),
+                    "service_id": str(context.service_id),
+                    "revision_id": str(context.revision_id or ""),
+                    "release_id": str(getattr(plan, "release_id", "") or ""),
+                    "artifact_digest": str(getattr(plan, "artifact_digest", "") or ""),
+                    "process": process_name,
+                    "ownership_label": "passdeployer.deployment",
+                    "last_error": str(error or "")[:1000],
+                },
+            )
+
     @staticmethod
     def _assert_runtime_selection(context: DeploymentExecutionContext) -> None:
         selection = context.runtime_selection
@@ -542,6 +691,19 @@ class DeploymentLifecycleExecutor:
             apply_failure_details=error.details,
         )
         details = {**dict(error.details or {}), **cleanup}
+        try:
+            self._journal_plan_resources(
+                context,
+                plan,
+                state=("cleanup_pending" if cleanup.get("cleanup_failed") else "retired"),
+                handle=handle,
+                error=str(error.technical_message or error),
+            )
+        except Exception:
+            logger.exception(
+                "Could not persist cancelled runtime resource journal for deployment %s.",
+                context.deployment_id,
+            )
         transitioned = self.store.transition(
             context,
             sm.DEPLOY_CANCELLED,
@@ -572,8 +734,11 @@ class DeploymentLifecycleExecutor:
         *,
         rollback_plan: Any | None = None,
         apply_failure_details: Mapping[str, Any] | None = None,
+        readiness_timeout: float | None = None,
     ) -> dict[str, Any]:
-        if not context.owns_execution():
+        try:
+            context.assert_owner()
+        except StaleDeploymentWorkerError:
             return {}
 
         if handle is None:
@@ -584,7 +749,7 @@ class DeploymentLifecycleExecutor:
                         recovery(
                             dict(apply_failure_details),
                             operation_key=context.operation("cancel-recovery"),
-                            cancel_check=lambda: False,
+                            cancel_check=context.runtime_fence_check,
                         )
                         or {}
                     )
@@ -605,15 +770,32 @@ class DeploymentLifecycleExecutor:
         # stopping/removing that handle would therefore destroy production state.
         if rollback_plan is not None:
             try:
-                runtime.rollback(
+                rollback_result = runtime.rollback(
                     rollback_plan,
                     operation_key=context.operation("cancel-rollback"),
                     target_plan=rollback_plan,
-                    cancel_check=lambda: False,
+                    cancel_check=context.runtime_fence_check,
                 )
+                if not rollback_result.success or rollback_result.handle is None:
+                    raise RuntimeOperationError(
+                        "The previous runtime was not restored with an identifiable handle.",
+                        code="deployment_rollback_unconfirmed",
+                    )
+                rollback_timeout = max(30.0, float(readiness_timeout or 0.0))
+                readiness = runtime.wait_ready(
+                    rollback_result.handle,
+                    timeout=rollback_timeout,
+                    cancel_check=context.runtime_fence_check,
+                )
+                if not readiness.success:
+                    raise RuntimeOperationError(
+                        "The previous runtime did not become ready after rollback.",
+                        code="deployment_rollback_unready",
+                    )
                 return {
                     "cleanup_failed": False,
                     "rollback_performed": True,
+                    "rollback_ready": True,
                     "cleanup_attempted": False,
                 }
             except Exception as exc:
@@ -636,7 +818,7 @@ class DeploymentLifecycleExecutor:
                 operation(
                     handle,
                     operation_key=context.operation(suffix),
-                    cancel_check=lambda: False,
+                    cancel_check=context.runtime_fence_check,
                 )
             except Exception as exc:
                 failures.append(
@@ -665,8 +847,12 @@ class DeploymentLifecycleExecutor:
         plan: Any,
         handle: RuntimeHandle | None,
         failure_details: Mapping[str, Any] | None = None,
+        *,
+        readiness_timeout: float | None = None,
     ) -> tuple[bool, bool, dict[str, Any]]:
-        if not context.owns_execution():
+        try:
+            context.assert_owner()
+        except StaleDeploymentWorkerError:
             return False, False, {}
 
         if handle is None:
@@ -677,7 +863,7 @@ class DeploymentLifecycleExecutor:
                         recovery(
                             dict(failure_details),
                             operation_key=context.operation("apply-recovery"),
-                            cancel_check=lambda: False,
+                            cancel_check=context.runtime_fence_check,
                         )
                         or {}
                     )
@@ -701,13 +887,32 @@ class DeploymentLifecycleExecutor:
         target_plan = getattr(plan, "rollback_plan", None)
         if target_plan is not None:
             try:
-                runtime.rollback(
+                rollback_result = runtime.rollback(
                     plan,
                     operation_key=context.operation("rollback"),
                     target_plan=target_plan,
-                    cancel_check=context.cancellation_requested,
+                    cancel_check=context.runtime_fence_check,
                 )
-                return True, False, {"cleanup_attempted": False}
+                if not rollback_result.success or rollback_result.handle is None:
+                    raise RuntimeOperationError(
+                        "The previous runtime was not restored with an identifiable handle.",
+                        code="deployment_rollback_unconfirmed",
+                    )
+                rollback_timeout = max(30.0, float(readiness_timeout or 0.0))
+                readiness = runtime.wait_ready(
+                    rollback_result.handle,
+                    timeout=rollback_timeout,
+                    cancel_check=context.runtime_fence_check,
+                )
+                if not readiness.success:
+                    raise RuntimeOperationError(
+                        "The previous runtime did not become ready after rollback.",
+                        code="deployment_rollback_unready",
+                    )
+                return True, False, {
+                    "cleanup_attempted": False,
+                    "rollback_ready": True,
+                }
             except Exception as exc:
                 return False, True, {
                     "cleanup_attempted": False,

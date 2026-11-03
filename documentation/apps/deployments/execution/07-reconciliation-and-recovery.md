@@ -149,9 +149,24 @@ Checks:
 - DEPLOYING;
 - RUNNING;
 - STOPPING;
+- FAILED;
 - legacy SUCCEEDED
 
 against runtime reality.
+
+Failed Service projections are included when desired state is still running,
+so they can be compared with observed runtime. Reconciliation checks both the
+lifecycle generation and active revision before runtime operations, during
+runtime callbacks, while journaling, and again before projecting its result.
+Partial apply recovery uses the same current-owner callback as normal runtime
+operations.
+
+Before native runtime apply, each planned process is journaled. Created and
+ready states are persisted as the Swarm group progresses; activation marks the
+resources active. If a stale worker has no ready primary Swarm service, the
+monitor checks journaled resources and ownership labels, then restores the
+previous active release or removes only resources owned by that Deploy before
+terminalizing the lost worker attempt.
 
 ## Scheduler gate versus lifecycle state
 
@@ -215,6 +230,18 @@ For container creation/start/health phases, recovery first proves the resource b
 
 Ambiguous pre-container worker loss is failed closed.
 
+The execution intent includes its queued lifecycle generation and active
+revision. Recovery reacquires the Service advisory lock and checks that intent
+before adopting a ready runtime or projecting a terminal state. When a stale
+Swarm worker has no ready primary service, recovery consults the resource
+journal and deployment labels before removing its resources or marking it
+failed; an unknown or unavailable runtime remains unresolved for a later pass.
+
+Resource identities are journaled before apply, then advanced through created,
+ready, active, retired, or cleanup-pending states. This allows recovery to
+resume cleanup after worker loss without guessing from a canonical resource
+name.
+
 ## Desired-state repair
 
 ### Desired stopped
@@ -261,6 +288,9 @@ This is separate from application runtime reconciliation.
 4. Desired state is not overwritten by observed state.
 5. Reconciliation actions are safe to repeat.
 6. Runtime unavailability blocks destructive action rather than pretending convergence.
+7. Reconciliation compares lifecycle generation and active revision again
+   before projecting a result, so a stale observation cannot overwrite newer
+   user intent.
 
 ## Problem navigation
 

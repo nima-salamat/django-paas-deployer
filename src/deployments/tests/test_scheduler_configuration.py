@@ -264,7 +264,8 @@ def test_ready_app_deletion_task_is_routed_and_reconciled():
     assert 'stage="deletion_pending"' in deletion_query
     assert 'name="app_catalog.delete_application_installation"' in tasks
     assert "max_retries=None" in tasks
-    assert 'delete_application_installation.delay(str(pending.pk))' in tasks
+    assert "pending_deletions = ApplicationInstance.objects.filter(" in tasks
+    assert "cleanup_terminal_application()" in tasks
 
 
 def test_ready_app_deletion_reconciliation_does_not_require_stale_updated_at():
@@ -324,8 +325,9 @@ def test_beat_uses_a_lightweight_producer_app_and_keeps_database_scheduler():
     assert "django_celery_beat.schedulers:DatabaseScheduler" in compose
     assert '--max-interval' in compose
     assert "fixups=[]" in beat
-    assert "app.conf.imports = ()" in beat
-    assert "app.conf.include = ()" in beat
+    assert "imports=()," in beat
+    assert "CELERY_IMPORTS=()," in beat
+    assert "include=()," in beat
 
 
 def test_idle_periodic_pulses_are_bounded_and_event_outbox_has_a_hook_fallback():

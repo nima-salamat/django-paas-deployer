@@ -550,6 +550,9 @@ class DeployViewSet(ModelViewSet):
                     "execution_task_id": task_id,
                     "worker_heartbeat_at": None,
                     "previous_deploy_id": previous_deploy_id,
+                    "expected_lifecycle_generation": lifecycle_generation,
+                    "expected_active_revision_id": str(service.active_revision_id or ""),
+                    "worker_recovery_attempts": 0,
                 },
             )
 
@@ -785,6 +788,8 @@ class DeployViewSet(ModelViewSet):
                     created_by=request.user,
                     version=active_deploy.version,
                     config=dict(target_release.revision.config_snapshot or {}),
+                    expected_lifecycle_generation=int(generation),
+                    expected_active_revision_id=str(service.active_revision_id or ""),
                     status=DeploymentStatusChoices.PENDING,
                     stage="queued",
                     progress=0,
@@ -1142,6 +1147,9 @@ class DeployViewSet(ModelViewSet):
                     "execution_task_id": task_id,
                     "worker_heartbeat_at": None,
                     "previous_deploy_id": previous_deploy_id,
+                    "expected_lifecycle_generation": execution_generation,
+                    "expected_active_revision_id": str(service.active_revision_id or ""),
+                    "worker_recovery_attempts": 0,
                 },
             )
 
@@ -1820,11 +1828,9 @@ def set_deploy_apiview(request):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # Selection is a configuration/activation operation, not a deployment
-            # result check. A deployment row may represent an older, failed, partial,
-            # or otherwise non-succeeded attempt and still carry the revision that the
-            # operator wants to make authoritative. Validate ownership and revision
-            # integrity here; do not gate selection on Deploy.status.
+            # A user-facing selection cannot promote a revision because this
+            # endpoint does not perform a runtime rollout. It may only repair the
+            # legacy selected_deploy projection for the already-active revision.
             is_owner = str(service_item.user_id) == str(request.user.id)
             is_staff = bool(
                 getattr(request.user, "is_staff", False)
@@ -1843,13 +1849,31 @@ def set_deploy_apiview(request):
                         status=status.HTTP_403_FORBIDDEN,
                     )
 
-            # Revision is runtime authority; selected_deploy is compatibility state.
-            # ensure_revision_for_deploy creates a snapshot for legacy deploy rows
-            # that pre-date the revision model, without consulting deployment status.
-            deploy_item = ensure_revision_for_deploy(deploy_item)
-            from services.revisioning import activate_revision_locked
-            activate_revision_locked(service_item, deploy_item.revision_id)
-            service_item.refresh_from_db(fields=["active_revision", "selected_deploy"])
+            if deploy_item.status != DeploymentStatusChoices.SUCCEEDED or not deploy_item.revision_id:
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("Only a successfully deployed active revision can be selected."),
+                        "code": "deployment_not_active",
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if str(service_item.active_revision_id or "") != str(deploy_item.revision_id):
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("A release can only become active through deployment or rollback."),
+                        "code": "runtime_activation_required",
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            Service.objects.filter(
+                pk=service_item.pk,
+                active_revision_id=deploy_item.revision_id,
+            ).update(
+                selected_deploy_id=deploy_item.pk,
+                selected_deploy_at=timezone.now(),
+            )
 
     except Service.DoesNotExist:
         return Response(
@@ -1933,8 +1957,10 @@ def unset_deploy_apiview(request):
                         status=status.HTTP_403_FORBIDDEN,
                     )
 
-            active_deploy = get_active_deploy(service_item)
-            if active_deploy is None or str(active_deploy.id) != str(deploy_item.id):
+            if (
+                str(service_item.selected_deploy_id or "")
+                != str(deploy_item.pk)
+            ):
                 return Response(
                     {
                         "result": "error",
@@ -1943,8 +1969,17 @@ def unset_deploy_apiview(request):
                     status=status.HTTP_409_CONFLICT,
                 )
 
+            if str(service_item.active_revision_id or "") == str(deploy_item.revision_id or ""):
+                return Response(
+                    {
+                        "result": "error",
+                        "detail": _("The active release cannot be unselected without a runtime stop or rollback."),
+                        "code": "runtime_activation_required",
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
             Service.objects.filter(pk=service_item.pk).update(
-                active_revision_id=None,
                 selected_deploy_id=None,
                 selected_deploy_at=timezone.now(),
             )

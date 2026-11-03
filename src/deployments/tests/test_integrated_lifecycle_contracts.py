@@ -40,16 +40,15 @@ class IntegratedLifecycleContractTests(unittest.TestCase):
         self.assertIn("ownership mismatch", container)
         self.assertIn('labels.get("managed-by")', container)
 
-    def test_manual_active_selection_does_not_gate_on_deploy_status(self):
+    def test_manual_active_selection_cannot_promote_a_release_without_runtime_rollout(self):
         api = self.read("deploy/apis.py")
         selection = api.split("def set_deploy_apiview", 1)[1].split(
             'def unset_deploy_apiview', 1
         )[0]
-        self.assertIn("ensure_revision_for_deploy(deploy_item)", selection)
-        self.assertIn("activate_revision_locked(service_item, deploy_item.revision_id)", selection)
-        self.assertNotIn("DeploymentStatusChoices.SUCCEEDED", selection)
-        self.assertNotIn("Only a successfully completed deployment", selection)
-        self.assertNotIn('"deploy_not_ready"', selection)
+        self.assertIn("DeploymentStatusChoices.SUCCEEDED", selection)
+        self.assertIn("runtime_activation_required", selection)
+        self.assertNotIn("activate_revision_locked(", selection)
+        self.assertNotIn("active_revision_id=None", selection)
 
     def test_catalog_duplicate_ids_are_rejected(self):
         catalog = self.read("app_catalog/catalog.py")
@@ -95,7 +94,8 @@ def test_application_reconciliation_recovers_lost_start_and_cancel_tasks():
     assert "status=ApplicationStatus.PENDING" in text
     assert "start_application_installation.delay" in text
     assert "cancel_application_installation" in text
-    assert "delete_application_installation.delay(str(pending.pk))" in text
+    assert "pending_deletions = ApplicationInstance.objects.filter(" in text
+    assert "cleanup_terminal_application()" in text
 
 def test_application_queue_failure_does_not_leave_permanent_pending_state():
     text = (ROOT / "app_catalog/apis.py").read_text()

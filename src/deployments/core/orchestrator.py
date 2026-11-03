@@ -35,6 +35,7 @@ from deployments.common.exceptions import (
     DeploymentCancelled,
     DeploymentError,
     RollbackError,
+    StaleDeploymentWorkerError,
     to_deployment_error,
 )
 import docker
@@ -62,6 +63,7 @@ class DeploymentOrchestrator:
         event_sink: EventSink = None,
         deployment_id: Optional[str] = None,
         cancel_check: Optional[callable] = None,
+        ownership_check: Optional[callable] = None,
         activation_callback: Optional[callable] = None,
         runtime_backend: str = "legacy_docker",
         swarm_runtime: SwarmRuntime | None = None,
@@ -87,6 +89,7 @@ class DeploymentOrchestrator:
         self.rollback_manager = RollbackManager(logger=self.logger)
         self.cleanup_manager = CleanupManager(logger=self.logger)
         self._cancel_check = cancel_check
+        self._ownership_check = ownership_check
         self._activation_callback = activation_callback
         self._runtime_backend = str(runtime_backend or "legacy_docker").strip().lower()
         self._swarm_runtime_instance = swarm_runtime
@@ -106,6 +109,7 @@ class DeploymentOrchestrator:
         inspect_temp_dir = None
         new_container_started = False
         renamed_old_name: str | None = None
+        stale_worker = False
         self._created_process_containers = []
         if self._deadline and self._deadline.expired():
             raise DeploymentError(
@@ -228,6 +232,7 @@ class DeploymentOrchestrator:
             built_image = image.create(
                 on_build_output=self._on_build_output,
                 cancel_check=self._cancel_check,
+                ownership_check=self._ownership_check,
                 timeout_seconds=self._deadline.remaining() if self._deadline else None,
             )
             image_built = True
@@ -356,6 +361,7 @@ class DeploymentOrchestrator:
                 resource_limits=config.resource_limits,
             )
 
+            self._check_cancelled()
             if existing_container.exists():
                 self._assert_rolling_port_compatible(existing_container, config)
                 renamed_old_name = f"{config.name}-old-{int(__import__('time').time())}"
@@ -370,6 +376,7 @@ class DeploymentOrchestrator:
                 "container_creation", "Creating replacement container.", progress=65
             )
             try:
+                self._check_cancelled()
                 replacement_container.create()
                 self._journal_resource(config, kind="container", name=config.name, state="created")
             except DeploymentError:
@@ -382,6 +389,7 @@ class DeploymentOrchestrator:
                 "container_startup", "Starting replacement container.", progress=80
             )
             try:
+                self._check_cancelled()
                 replacement_container.start()
                 new_container_started = True
                 self._journal_resource(config, kind="container", name=config.name, state="started")
@@ -496,6 +504,18 @@ class DeploymentOrchestrator:
                 },
             )
 
+        except StaleDeploymentWorkerError as exc:
+            stale_worker = True
+            return DeploymentResult(
+                success=False,
+                status="stale",
+                message="Deployment worker lost lifecycle ownership; runtime state was left for its current owner.",
+                image_ref=config.image_ref,
+                container_name=config.name,
+                error=str(exc),
+                stage="stale_worker",
+                details={"worker_ownership_lost": True},
+            )
         except DeploymentCancelled as exc:
             return self._handle_cancellation(
                 config, exc,
@@ -527,10 +547,11 @@ class DeploymentOrchestrator:
         finally:
             try:
                 from deploy.base_images import base_image_settings, release_base_image_leases
-                release_base_image_leases(
-                    self.logger.deployment_id,
-                    remove_if_unretained=not base_image_settings()["retain_after_deploy"],
-                )
+                if not stale_worker:
+                    release_base_image_leases(
+                        self.logger.deployment_id,
+                        remove_if_unretained=not base_image_settings()["retain_after_deploy"],
+                    )
             except Exception as exc:
                 self.logger.warning("cleanup", f"Failed to release base image leases: {exc}", progress=99)
             if inspect_temp_dir:
@@ -679,6 +700,8 @@ class DeploymentOrchestrator:
     # ------------------------------------------------------------------
 
     def _check_cancelled(self) -> None:
+        if self._ownership_check is not None:
+            self._ownership_check()
         if self._cancel_check is None:
             return
         try:
@@ -696,6 +719,8 @@ class DeploymentOrchestrator:
                     details={"timeout": timeout},
                 )
         except DeploymentCancelled:
+            raise
+        except StaleDeploymentWorkerError:
             raise
         except Exception:
             return

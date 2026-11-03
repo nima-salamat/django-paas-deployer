@@ -20,7 +20,7 @@ Advisory locks have several nice properties:
     transaction-per-Docker-stage pattern.
   * They are re-acquirable from any backend, so a stuck lock can be
     cleared with ``pg_advisory_unlock`` if absolutely necessary.
-  * They are indexed by bigint, so collisions are impossible.
+  * They use deterministic 64-bit keys with a negligible collision probability.
 
 We use a fixed namespace prefix so our locks never collide with locks
 taken by other subsystems in the same database.
@@ -29,6 +29,8 @@ taken by other subsystems in the same database.
 from __future__ import annotations
 
 import logging
+import hashlib
+import uuid
 from contextlib import contextmanager
 from typing import Iterator
 
@@ -37,9 +39,9 @@ from django.db import connection, transaction
 logger = logging.getLogger(__name__)
 
 
-# Namespace prefix for our advisory locks.  Arbitrary but constant.
-# 0x4445504C = "DEPL" in ASCII.
-_LOCK_NAMESPACE = 0x4445504C
+# Domain separation keeps these locks distinct from other single-bigint
+# advisory-lock users while preserving the full 64-bit deterministic key.
+_LOCK_DOMAIN = b"deployer-lock-v1\0"
 
 
 class DeploymentLock:
@@ -58,11 +60,13 @@ class DeploymentLock:
     block, because a Celery worker must never hang.
     """
 
-    def __init__(self, service_id: int, *, shared: bool = False, timeout_seconds: float = 0.0):
+    def __init__(self, service_id: int | str, *, shared: bool = False, timeout_seconds: float = 0.0):
         self.service_id = service_id
         self.shared = shared
         self.timeout_seconds = timeout_seconds
         self._acquired = False
+        self._connection_ref = None
+        self._backend_pid: int | None = None
 
     def acquire(self) -> bool:
         """
@@ -72,32 +76,14 @@ class DeploymentLock:
         ``timeout_seconds > 0`` we poll up to that duration.
         """
         key = self._key()
-        sql = "SELECT pg_try_advisory_lock(%s, %s);"
         if self.timeout_seconds <= 0:
-            with connection.cursor() as cur:
-                cur.execute(sql, [_LOCK_NAMESPACE, key])
-                ok = bool(cur.fetchone()[0])
-            if ok:
-                self._acquired = True
-                logger.info(
-                    "DeploymentLock acquired for service %s (namespace=%s key=%s)",
-                    self.service_id, _LOCK_NAMESPACE, key,
-                )
-            return ok
+            return self._try_acquire(key)
 
         # Polling fallback — only used when callers explicitly want to wait.
         import time
         deadline = time.time() + self.timeout_seconds
         while True:
-            with connection.cursor() as cur:
-                cur.execute(sql, [_LOCK_NAMESPACE, key])
-                ok = bool(cur.fetchone()[0])
-            if ok:
-                self._acquired = True
-                logger.info(
-                    "DeploymentLock acquired for service %s after polling",
-                    self.service_id,
-                )
+            if self._try_acquire(key):
                 return True
             if time.time() >= deadline:
                 return False
@@ -106,26 +92,90 @@ class DeploymentLock:
     def release(self) -> None:
         if not self._acquired:
             return
-        key = self._key()
-        with connection.cursor() as cur:
-            cur.execute(
-                "SELECT pg_advisory_unlock(%s, %s);",
-                [_LOCK_NAMESPACE, key],
+        if not self.assert_held():
+            self._acquired = False
+            logger.warning(
+                "DeploymentLock session was lost before release for service %s; "
+                "the database session has already released its advisory lock.",
+                self.service_id,
             )
-            cur.fetchone()
-        self._acquired = False
+            return
+        try:
+            with connection.cursor() as cur:
+                cur.execute("SELECT pg_advisory_unlock(%s);", [self._key()])
+                released = bool(cur.fetchone()[0])
+        finally:
+            self._acquired = False
+            self._connection_ref = None
+            self._backend_pid = None
+        if not released:
+            logger.warning("DeploymentLock was not held during release for service %s", self.service_id)
+        else:
+            logger.info("DeploymentLock released for service %s", self.service_id)
+
+    def _try_acquire(self, key: int) -> bool:
+        with connection.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s), pg_backend_pid();", [key])
+            acquired, backend_pid = cur.fetchone()
+        if not acquired:
+            return False
+        self._acquired = True
+        self._connection_ref = connection.connection
+        self._backend_pid = int(backend_pid)
         logger.info(
-            "DeploymentLock released for service %s", self.service_id,
+            "DeploymentLock acquired for service %s (key=%s backend_pid=%s)",
+            self.service_id,
+            key,
+            backend_pid,
         )
+        return True
+
+    def assert_held(self) -> bool:
+        """Prove this Python worker still owns the lock on its original DB session."""
+        if not self._acquired or self._connection_ref is None:
+            return False
+        current = connection.connection
+        if current is not self._connection_ref or bool(getattr(current, "closed", False)):
+            return False
+        key = self._key()
+        try:
+            with connection.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_backend_pid(), EXISTS ("
+                    "SELECT 1 FROM pg_locks WHERE locktype = 'advisory' "
+                    "AND objsubid = 1 AND granted "
+                    "AND classid = ((%s::bigint >> 32) & 4294967295)::oid "
+                    "AND objid = (%s::bigint & 4294967295)::oid"
+                    ");",
+                    [key, key],
+                )
+                backend_pid, held = cur.fetchone()
+        except Exception:
+            logger.warning(
+                "Could not verify advisory-lock session for service %s.",
+                self.service_id,
+                exc_info=True,
+            )
+            return False
+        return int(backend_pid) == self._backend_pid and bool(held)
 
     def _key(self) -> int:
-        # Service IDs in this codebase are integer PKs.  We use the PK
-        # directly as the second key — advisory locks accept two int32s.
-        try:
-            return int(self.service_id) & 0x7FFFFFFF
-        except (TypeError, ValueError):
-            # Fall back to a hash if the PK is non-int (e.g. UUID).
-            return abs(hash(str(self.service_id))) & 0x7FFFFFFF
+        value = self.service_id
+        if isinstance(value, uuid.UUID):
+            canonical = f"uuid:{value.hex}"
+        elif isinstance(value, int) or str(value).strip().lstrip("+-").isdigit():
+            canonical = f"int:{int(value)}"
+        else:
+            try:
+                canonical = f"uuid:{uuid.UUID(str(value).strip()).hex}"
+            except (TypeError, ValueError, AttributeError):
+                canonical = f"str:{str(value).strip()}"
+        digest = hashlib.blake2b(
+            _LOCK_DOMAIN + canonical.encode("utf-8"),
+            digest_size=8,
+            person=b"deployer-lock",
+        ).digest()
+        return int.from_bytes(digest, byteorder="big", signed=True)
 
     def __enter__(self) -> "DeploymentLock":
         if not self.acquire():
@@ -166,6 +216,44 @@ def acquire_service_deployment_lock(
         lock.release()
 
 
+@contextmanager
+def acquire_service_deployment_transaction_lock(
+    service_id: int | str,
+) -> Iterator[None]:
+    """Fence a Service deletion for its complete surrounding transaction.
+
+    The transaction-scoped PostgreSQL lock conflicts with the session lock
+    held by deployment, stop, restart, and reconciliation workers. PostgreSQL
+    releases it automatically on either commit or rollback, so a failed
+    pre-delete cleanup cannot strand a session lock.
+    """
+    if not connection.in_atomic_block:
+        raise RuntimeError(
+            "Service deletion must hold its deployment transaction lock inside atomic()."
+        )
+
+    key = DeploymentLock(service_id)._key()
+    if connection.vendor == "postgresql":
+        with connection.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_xact_lock(%s);", [key])
+            acquired = bool(cur.fetchone()[0])
+    else:
+        # Non-PostgreSQL backends are used by fast unit tests. On databases
+        # that implement row locks, hold the Service row until deletion ends.
+        from services.models import Service
+
+        acquired = Service.objects.select_for_update().filter(pk=service_id).exists()
+
+    if not acquired:
+        from deployments.common.exceptions import DeploymentLockError
+
+        raise DeploymentLockError(
+            f"Service {service_id} still has an active lifecycle operation; deletion was refused.",
+            details={"service_id": str(service_id), "operation": "service_delete"},
+        )
+    yield
+
+
 def is_service_locked(service_id: int) -> bool:
     """
     Best-effort check whether a service is currently locked.
@@ -175,14 +263,22 @@ def is_service_locked(service_id: int) -> bool:
     only — never use it to make deployment decisions.
     """
     key = DeploymentLock(service_id)._key()
+    high = (key >> 32) & 0xFFFFFFFF
+    low = key & 0xFFFFFFFF
     with connection.cursor() as cur:
         cur.execute(
             "SELECT count(*) FROM pg_locks "
             "WHERE locktype = 'advisory' "
-            "AND classid = %s AND objid = %s;",
-            [_LOCK_NAMESPACE, key],
+            "AND objsubid = 1 AND granted "
+            "AND classid = %s::oid AND objid = %s::oid;",
+            [high, low],
         )
         return int(cur.fetchone()[0]) > 0
 
 
-__all__ = ["DeploymentLock", "acquire_service_deployment_lock", "is_service_locked"]
+__all__ = [
+    "DeploymentLock",
+    "acquire_service_deployment_lock",
+    "acquire_service_deployment_transaction_lock",
+    "is_service_locked",
+]

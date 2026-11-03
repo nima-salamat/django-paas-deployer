@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 
-def test_force_cancel_cleanup_targets_deployment_image(monkeypatch):
+def test_force_cancel_cleanup_does_not_remove_a_shared_deployment_image(monkeypatch):
     from services.api import runtime
 
     class Images:
@@ -20,5 +20,28 @@ def test_force_cancel_cleanup_targets_deployment_image(monkeypatch):
     service=SimpleNamespace(id=SimpleNamespace(hex="12345678"), get_docker_service_name=lambda: "svc")
     deploy=SimpleNamespace(pk=42, version="1.20")
     report=runtime._force_cancel_runtime_cleanup(service, container_name="svc", deploy=deploy)
-    assert images.removed == ["svc:1.20"]
-    assert not any(i.get("ref") == "svc:latest" for i in report["images"])
+    assert images.removed == []
+    assert report["images"] == []
+
+
+def test_force_cancel_cleanup_stops_before_runtime_access_after_lifecycle_loss(monkeypatch):
+    import pytest
+
+    from deployments.common.exceptions import StaleDeploymentWorkerError
+    from services.api import runtime
+
+    service = SimpleNamespace(pk="service-1", active_revision_id=None)
+    deploy = SimpleNamespace(pk=42)
+    monkeypatch.setattr(
+        runtime,
+        "Client",
+        lambda: pytest.fail("stale cleanup must not connect to Docker"),
+    )
+
+    with pytest.raises(StaleDeploymentWorkerError):
+        runtime._force_cancel_runtime_cleanup(
+            service,
+            container_name="svc",
+            deploy=deploy,
+            ownership_check=lambda: False,
+        )

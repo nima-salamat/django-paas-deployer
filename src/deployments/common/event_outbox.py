@@ -36,12 +36,17 @@ def dispatch_pending(*, batch_size: int = 100) -> dict[str, int]:
                 if row is None:
                     continue
                 payload = dict(row.payload or {})
+                deployment_id = row.deployment_id or payload.get("deployment_id")
+                if not deployment_id:
+                    raise ValueError(
+                        f"Outbox event {row.pk} has no retained deployment identifier."
+                    )
                 event_id = row.event_id
                 log_db = _log_db_alias()
                 if not DeployLog.objects.using(log_db).filter(event_id=event_id).exists():
                     DeployLog.objects.using(log_db).create(
                         event_id=event_id,
-                        deploy_id=row.deployment_id,
+                        deploy_id=deployment_id,
                         service_id=row.service_id,
                         stage=row.stage,
                         event_type=row.event_type,
@@ -52,7 +57,7 @@ def dispatch_pending(*, batch_size: int = 100) -> dict[str, int]:
                         exception_type=str(payload.get("exception_type") or ""),
                         traceback=str(payload.get("traceback") or ""),
                     )
-                if not _publish(row.deployment_id, payload):
+                if not _publish(deployment_id, payload):
                     raise RuntimeError("Deployment event channel layer is unavailable.")
                 row.dispatched_at = timezone.now()
                 row.next_attempt_at = None

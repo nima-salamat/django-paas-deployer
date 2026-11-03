@@ -268,7 +268,14 @@ class ServiceViewSet(ModelViewSet):
         except Exception:
             logger.debug("share pre-delete notify failed", exc_info=True)
 
-        service.delete()
+        from deployments.common.exceptions import DeploymentLockError
+        try:
+            service.delete()
+        except DeploymentLockError as exc:
+            return Response(
+                {"result": "error", "detail": str(exc.user_message), "code": exc.code},
+                status=status.HTTP_409_CONFLICT,
+            )
         try:
             from core.app_cache import invalidate_user_services
             invalidate_user_services(request.user.id)

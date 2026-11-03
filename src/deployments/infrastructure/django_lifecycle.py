@@ -5,10 +5,12 @@ from __future__ import annotations
 from typing import Mapping
 
 from django.db import transaction
+from django.utils import timezone
 
 from deploy.models import Deploy
 from deployments.common.exceptions import DeploymentCancelled, StaleDeploymentWorkerError
 from deployments.application.context import DeploymentExecutionContext
+from deployments.core.state.manager import ActivationOutcome
 from deployments.core.state.manager import StateManager
 from deployments.common import state_machine as sm
 
@@ -28,6 +30,7 @@ class DjangoDeploymentLifecycleStore:
         self.task_id = task_id
         self.expected_active_revision_id = expected_active_revision_id
         self.allow_active_revision_replacement = bool(allow_active_revision_replacement)
+        self.last_activation_outcome: str | None = None
 
     @property
     def status(self) -> str:
@@ -64,6 +67,7 @@ class DjangoDeploymentLifecycleStore:
         message: str = "",
         details: Mapping[str, object] | None = None,
     ) -> bool:
+        self.last_activation_outcome = None
         if not context.owns_execution():
             return False
         updates = {"status_message": message[:500]}
@@ -119,7 +123,8 @@ class DjangoDeploymentLifecycleStore:
                 "progress": 100,
                 "details": dict(details or {}),
             }
-            return StateManager.activate_revision_and_succeed(
+            activation_outcome: dict[str, str] = {}
+            committed = StateManager.activate_revision_and_succeed(
                 int(self.deployment_id),
                 context.revision_id,
                 task_id=self.task_id or context.worker_task_id,
@@ -128,9 +133,12 @@ class DjangoDeploymentLifecycleStore:
                 enforce_previous_deploy=context.enforce_previous_deploy,
                 expected_active_revision_id=self.expected_active_revision_id,
                 allow_active_revision_replacement=self.allow_active_revision_replacement,
+                outcome=activation_outcome,
                 update_fields={**updates, "stage": "finished", "progress": 100},
                 event_payload=event_payload,
             )
+            self.last_activation_outcome = activation_outcome.get("value")
+            return committed
         event_payload = None
         if terminal:
             import uuid
@@ -166,6 +174,7 @@ class DjangoDeploymentLifecycleStore:
         runtime_id: str = "",
         state: str = "active",
         metadata: Mapping[str, object] | None = None,
+        error: str = "",
     ) -> None:
         """Record runtime ownership only while this worker still owns the lifecycle."""
         from deploy.models import DeploymentResource
@@ -193,8 +202,14 @@ class DjangoDeploymentLifecycleStore:
                 .filter(pk=deploy.service_id)
                 .first()
             )
+            activation_commit = (
+                state == "active"
+                and deploy.status == sm.DEPLOY_SUCCEEDED
+            )
+            cleanup_commit = state in {"retired", "cleanup_pending"}
             if service is None or (
-                task_id
+                not activation_commit
+                and task_id
                 and (
                     str(deploy.execution_task_id or "") != task_id
                     or str(service.task_id or "") != task_id
@@ -208,7 +223,7 @@ class DjangoDeploymentLifecycleStore:
                         "worker_task_id": task_id,
                     },
                 )
-            if sm.is_deploy_terminal(deploy.status):
+            if sm.is_deploy_terminal(deploy.status) and not activation_commit:
                 raise StaleDeploymentWorkerError(
                     "Cannot journal a runtime resource after deployment became terminal.",
                     details={
@@ -216,10 +231,35 @@ class DjangoDeploymentLifecycleStore:
                         "status": str(deploy.status),
                     },
                 )
-            if deploy.cancel_requested:
+            if deploy.cancel_requested and not (activation_commit or cleanup_commit):
                 raise DeploymentCancelled(
                     "Deployment cancellation was requested before runtime resource journaling.",
                     details={"deployment_id": str(self.deployment_id)},
+                )
+            expected_generation = context.expected_lifecycle_generation
+            actual_generation = int(getattr(service, "lifecycle_generation", 0) or 0)
+            if (
+                expected_generation is not None
+                and actual_generation != int(expected_generation)
+            ):
+                raise StaleDeploymentWorkerError(
+                    "Cannot journal a runtime resource after the service lifecycle generation changed.",
+                    details={
+                        "deployment_id": str(self.deployment_id),
+                        "service_id": str(service.pk),
+                        "expected_lifecycle_generation": int(expected_generation),
+                        "actual_lifecycle_generation": actual_generation,
+                    },
+                )
+            if activation_commit and str(service.active_revision_id or "") != str(context.revision_id or ""):
+                raise StaleDeploymentWorkerError(
+                    "Cannot mark a runtime resource active unless its revision is authoritative.",
+                    details={
+                        "deployment_id": str(self.deployment_id),
+                        "service_id": str(service.pk),
+                        "revision_id": str(context.revision_id or ""),
+                        "active_revision_id": str(service.active_revision_id or ""),
+                    },
                 )
             DeploymentResource.objects.update_or_create(
                 deployment_id=int(self.deployment_id),
@@ -230,9 +270,54 @@ class DjangoDeploymentLifecycleStore:
                     "state": str(state)[:32],
                     "owned": True,
                     "metadata": dict(metadata or {}),
-                    "last_error": "",
+                    "last_error": str(error or "")[:2000],
+                    "retired_at": timezone.now() if state == "retired" else None,
                 },
             )
+
+    def record_finalization(
+        self,
+        context: DeploymentExecutionContext,
+        details: Mapping[str, object] | None = None,
+    ) -> bool:
+        """Persist post-activation cleanup state without reopening Deploy status."""
+        from deploy.models import Deploy
+        from services.models import Service
+
+        details = dict(details or {})
+        with transaction.atomic():
+            deploy = Deploy.objects.select_for_update().filter(pk=self.deployment_id).first()
+            if deploy is None or deploy.status != sm.DEPLOY_SUCCEEDED:
+                return False
+            service = Service.objects.select_for_update().filter(pk=deploy.service_id).first()
+            if service is None:
+                return False
+            expected_generation = context.expected_lifecycle_generation
+            if (
+                expected_generation is not None
+                and int(getattr(service, "lifecycle_generation", 0) or 0)
+                != int(expected_generation)
+            ):
+                return False
+            if str(service.active_revision_id or "") != str(context.revision_id or ""):
+                return False
+            cleanup_failed = bool(details.get("cleanup_failed"))
+            journal_failed = bool(details.get("journal_update_failed"))
+            reconciliation_required = bool(
+                details.get("reconciliation_required") or cleanup_failed or journal_failed
+            )
+            cleanup_status = (
+                "critical"
+                if cleanup_failed or journal_failed
+                else ("clean" if details.get("cleanup_attempted") else "not_required")
+            )
+            Deploy.objects.filter(pk=deploy.pk, status=sm.DEPLOY_SUCCEEDED).update(
+                reconciliation_required=reconciliation_required,
+                cleanup_status=cleanup_status,
+                cleanup_failures=list(details.get("cleanup_failures") or []),
+                updated_at=timezone.now(),
+            )
+            return True
 
     def is_terminal(self) -> bool:
         return sm.is_deploy_terminal(self.status)

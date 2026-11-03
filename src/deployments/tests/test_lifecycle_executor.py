@@ -14,6 +14,7 @@ from deployments.common import state_machine as sm
 from deployments.runtime import RuntimeIdentity, RuntimeRegistry
 from deployments.runtime.errors import RuntimeOperationError
 from deployments.runtime.fake import FakeRuntime
+from deployments.runtime.observations import RuntimeObservation, RuntimeObservedStatus
 
 
 def _context(identity, *, owns=lambda: True, cancelled=lambda: False, events=None):
@@ -180,6 +181,20 @@ def test_initial_runtime_failure_cleans_owned_runtime():
 def test_replacement_failure_uses_explicit_rollback_plan():
     runtime = FakeRuntime()
     identity = RuntimeIdentity(service_id="service-1", runtime_name="app-service-1")
+    previous_identity = RuntimeIdentity(
+        service_id="service-1",
+        deployment_id="previous-deploy",
+        revision_id="previous-revision",
+        runtime_name="app-service-1",
+    )
+    runtime._observations[identity.resource_name()] = RuntimeObservation(
+        identity=previous_identity,
+        runtime_id="previous-runtime",
+        status=RuntimeObservedStatus.READY,
+        desired_replicas=1,
+        ready_replicas=1,
+        revision_id=previous_identity.revision_id,
+    )
     runtime.set_readiness_error(
         identity,
         RuntimeOperationError(
@@ -399,9 +414,13 @@ def test_replacement_cancellation_rolls_back_instead_of_removing_runtime():
     )
     # A replacement must snapshot the previously active runtime before apply.
     # The fake backend uses that snapshot to prove rollback does not remove it.
-    runtime._observations[identity.resource_name()] = SimpleNamespace(
+    runtime._observations[identity.resource_name()] = RuntimeObservation(
         identity=previous_identity,
         runtime_id="previous-runtime",
+        status=RuntimeObservedStatus.READY,
+        desired_replicas=1,
+        ready_replicas=1,
+        revision_id=previous_identity.revision_id,
     )
     runtime.set_readiness_error(
         identity,

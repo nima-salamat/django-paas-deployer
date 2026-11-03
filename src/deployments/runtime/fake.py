@@ -59,7 +59,7 @@ class FakeRuntime:
         self._snapshots: dict[str, RuntimeObservation | None] = {}
         self._operations: dict[str, RuntimeOperationResult] = {}
         self._logs: dict[str, list[str]] = {}
-        self._readiness_errors: dict[str, RuntimeOperationError] = {}
+        self._readiness_errors: dict[tuple[str, str | None, str | None], RuntimeOperationError] = {}
         self.apply_count = 0
         self.stop_count = 0
         self.remove_count = 0
@@ -184,11 +184,12 @@ class FakeRuntime:
                 code="runtime_cancelled",
                 category="cancellation",
             )
-        key = handle.identity.resource_name()
+        identity = handle.identity
+        key = (identity.resource_name(), identity.deployment_id, identity.revision_id)
         error = self._readiness_errors.get(key)
         if error is not None:
             raise error
-        current = self._observations.get(key)
+        current = self._observations.get(identity.resource_name())
         if current is None:
             raise RuntimeOperationError(
                 "The runtime resource disappeared before readiness.",
@@ -201,7 +202,7 @@ class FakeRuntime:
             desired_replicas=1,
             ready_replicas=1,
         )
-        self._observations[key] = ready
+        self._observations[identity.resource_name()] = ready
         return RuntimeOperationResult(success=True, changed=True, handle=handle, observation=ready)
 
     def finalize_success(
@@ -306,4 +307,5 @@ class FakeRuntime:
         self._logs[identity.resource_name()] = list(lines)
 
     def set_readiness_error(self, identity: RuntimeIdentity, error: RuntimeOperationError) -> None:
-        self._readiness_errors[identity.resource_name()] = error
+        key = (identity.resource_name(), identity.deployment_id, identity.revision_id)
+        self._readiness_errors[key] = error

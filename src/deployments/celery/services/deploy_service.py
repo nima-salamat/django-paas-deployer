@@ -23,7 +23,7 @@ from deployments.core.manager.container_manager import Container
 from deployments.core.swarm import swarm_enabled
 from deployments.core.state.locks import acquire_service_deployment_lock
 from deployments.core.state.manager import StateManager
-from services.models import Volume  # type: ignore
+from services.models import Service, Volume  # type: ignore
 from services.revisioning import ensure_revision_for_deploy, activate_revision_locked, materialize_revision_config, mark_revision_failed
 
 from deployments.common import parse_config, as_bool, as_int
@@ -245,16 +245,18 @@ class DeployService:
             return
 
         try:
-            with acquire_service_deployment_lock(service_id):
+            with acquire_service_deployment_lock(service_id) as deployment_lock:
                 self._execute_locked(
                     deploy_id,
                     service_id,
                     task_id=task_id,
                     allow_owned_retry=allow_owned_retry,
+                    deployment_lock=deployment_lock,
                 )
         except InvalidServiceStateError as exc:
             logger.info("Skipped deploy execution for ID %s: %s", deploy_id, str(exc))
             return
+
         except Exception as exc:
             # Do not turn a deterministic deployment bug into an invisible
             # worker-side log.  DeploymentError instances retain their retry
@@ -274,6 +276,7 @@ class DeployService:
         *,
         task_id: str | None = None,
         allow_owned_retry: bool = False,
+        deployment_lock=None,
     ) -> None:
         try:
             deploy_item = ServiceStateManager.lock_and_get_deployment(
@@ -285,13 +288,98 @@ class DeployService:
             logger.info("Skipped deploy execution for ID %s: %s", deploy_id, str(exc))
             return
 
+        if getattr(deploy_item, "_worker_recovery_exhausted", False):
+            committed = StateManager.transition_deploy_system_terminal(
+                deploy_item.pk,
+                DeploymentStatusChoices.FAILED,
+                update_fields={
+                    "stage": "worker_recovery_exhausted",
+                    "progress": 100,
+                    "status_message": "Deployment recovery limit was exceeded after repeated worker loss.",
+                    "error_message": "The worker repeatedly exited before completing the deployment.",
+                    "reconciliation_required": True,
+                    "cleanup_status": "pending",
+                },
+                expected_execution_task_id=str(task_id or ""),
+                expected_lifecycle_generation=deploy_item.expected_lifecycle_generation,
+                project_service=False,
+                event_payload={
+                    "event_id": str(uuid.uuid4()),
+                    "trace_id": str(deploy_item.pk),
+                    "deployment_id": str(deploy_item.pk),
+                    "service_id": str(deploy_item.service_id),
+                    "revision_id": str(deploy_item.revision_id or ""),
+                    "task_id": str(task_id or ""),
+                    "event_type": "deployment.worker_recovery_exhausted.error",
+                    "stage": "worker_recovery_exhausted",
+                    "level": "error",
+                    "message": "Deployment recovery limit was exceeded after repeated worker loss.",
+                    "progress": 100,
+                    "details": {"recovery_attempts": deploy_item.worker_recovery_attempts},
+                },
+            )
+            if committed:
+                try:
+                    StateManager.transition_service(
+                        service_id,
+                        "failed",
+                        update_fields={"task_id": None, "deploy_started": None},
+                        expected_lifecycle_generation=deploy_item.expected_lifecycle_generation,
+                    )
+                except InvalidServiceStateError:
+                    logger.info("Service projection changed during exhausted worker recovery deploy=%s", deploy_item.pk)
+            return
+
         # Preserve the lifecycle intent recorded by the caller. A Stop request
         # may have advanced lifecycle_generation while this worker was waiting.
         # Capture the service lifecycle generation at execution start.
         # intents bump this generation and invalidate an in-flight deployment.
-        expected_lifecycle_generation = int(
+        expected_lifecycle_generation = getattr(
+            deploy_item, "expected_lifecycle_generation", None
+        )
+        if expected_lifecycle_generation is None:
+            raise DeploymentValidationError(
+                "Deployment has no persisted lifecycle intent generation.",
+                stage="deployment_fence",
+                code="DEPLOYMENT_INTENT_GENERATION_MISSING",
+                user_message="This deployment request is stale and must be queued again.",
+            )
+        expected_lifecycle_generation = int(expected_lifecycle_generation)
+        actual_lifecycle_generation = int(
             getattr(deploy_item.service, "lifecycle_generation", 0) or 0
         )
+        if actual_lifecycle_generation != expected_lifecycle_generation:
+            StateManager.transition_deploy_system_terminal(
+                deploy_item.pk,
+                DeploymentStatusChoices.CANCELLED,
+                update_fields={
+                    "stage": "stale_intent",
+                    "progress": 100,
+                    "status_message": "Deployment was superseded by a newer service lifecycle intent.",
+                    "error_message": "Lifecycle generation changed before worker execution.",
+                    "reconciliation_required": True,
+                },
+                event_payload={
+                    "event_id": str(uuid.uuid4()),
+                    "trace_id": str(deploy_item.pk),
+                    "deployment_id": str(deploy_item.pk),
+                    "service_id": str(deploy_item.service_id),
+                    "revision_id": str(deploy_item.revision_id or ""),
+                    "task_id": str(task_id or ""),
+                    "event_type": "deployment.cancelled.warning",
+                    "stage": "stale_intent",
+                    "level": "warning",
+                    "message": "Deployment was superseded by a newer service lifecycle intent.",
+                    "progress": 100,
+                    "details": {
+                        "expected_lifecycle_generation": expected_lifecycle_generation,
+                        "actual_lifecycle_generation": actual_lifecycle_generation,
+                    },
+                },
+                expected_execution_task_id=str(task_id or ""),
+                project_service=False,
+            )
+            return
         container_name = deploy_item.service.get_docker_service_name()
         state_tracker = DjangoDeploymentState(deploy_item)
         StateManager.heartbeat_deploy(deploy_item.pk, task_id=task_id, stage="starting")
@@ -359,6 +447,20 @@ class DeployService:
                             },
                         )
 
+                    expected_active_revision_id = str(
+                        getattr(deploy_item, "expected_active_revision_id", "") or ""
+                    )
+                    actual_active_revision_id = str(service.active_revision_id or "")
+                    if actual_active_revision_id != expected_active_revision_id:
+                        raise InvalidServiceStateError(
+                            "Active revision changed while this deployment was preparing to activate.",
+                            details={
+                                "expected_active_revision_id": expected_active_revision_id,
+                                "actual_active_revision_id": actual_active_revision_id,
+                                "service_id": service_id,
+                            },
+                        )
+
                     # Activation is idempotent for the same immutable revision.
                     # A duplicate delivery or a recovery path may have already
                     # committed this exact revision. That is not a conflicting
@@ -405,6 +507,7 @@ class DeployService:
             result = self._process_deployment(
                 deploy_item, container_name, state_tracker, task_id=task_id,
                 activation_callback=_activate_deployment,
+                deployment_lock=deployment_lock,
             )
             if deploy_item.revision_id and getattr(result, "status", None) in {"failed", "cancelled"}:
                 mark_revision_failed(deploy_item.revision_id)
@@ -504,7 +607,37 @@ class DeployService:
                 .first()
             )
             if final_status not in {"cancelled", "succeeded", "rolled_back"}:
-                ServiceStateManager.sync_legacy_failure(service_id, deploy_id=deploy_item.pk)
+                failure_details = dict(getattr(translated, "details", {}) or {})
+                rollback_restored_active_revision = bool(
+                    failure_details.get("rollback_performed")
+                    and failure_details.get("rollback_ready")
+                    and not failure_details.get("rollback_failed")
+                    and str(getattr(deploy_item, "expected_active_revision_id", "") or "")
+                )
+                if rollback_restored_active_revision:
+                    try:
+                        StateManager.transition_service(
+                            service_id,
+                            SERVICE_STATUS_CHOICES.RUNNING,
+                            update_fields={
+                                "desired_state": "running",
+                                "task_id": None,
+                                "deploy_started": None,
+                            },
+                            allow_runtime_reconciliation=True,
+                            expected_lifecycle_generation=deploy_item.expected_lifecycle_generation,
+                            expected_active_revision_id=str(
+                                deploy_item.expected_active_revision_id
+                            ),
+                            expected_desired_state="running",
+                        )
+                    except InvalidServiceStateError:
+                        logger.info(
+                            "Could not restore the Service projection after rollback because newer lifecycle intent won: deploy=%s",
+                            deploy_item.pk,
+                        )
+                else:
+                    ServiceStateManager.sync_legacy_failure(service_id, deploy_id=deploy_item.pk)
             else:
                 logger.info(
                     "Skipping legacy failure projection for terminal deploy=%s status=%s.",
@@ -519,6 +652,7 @@ class DeployService:
         *,
         task_id: str | None = None,
         activation_callback=None,
+        deployment_lock=None,
     ):
         # Revision is now the executable source of truth. Deploy.config remains
         # only the compatibility input used when the revision is first created.
@@ -893,6 +1027,7 @@ class DeployService:
                 "Fast-path conditions met. Restarting existing container: %s",
                 container_name,
             )
+            self._assert_legacy_execution_owner(deploy_item, task_id, deployment_lock)
             Container(container_name).start()
             restart_result = MockOrchestratorResult(
                 success=True,
@@ -910,6 +1045,7 @@ class DeployService:
             result = self._execute_orchestrator(
                 deploy_item, container_name, platform, dockerfile_text, state_tracker,
                 cfg=cfg, activation_callback=activation_callback,
+                task_id=task_id, deployment_lock=deployment_lock,
             )
 
         return result
@@ -917,7 +1053,8 @@ class DeployService:
     def _execute_orchestrator(
         self, deploy_item: Deploy, container_name: str, platform: str,
         dockerfile_text: str, state_tracker: DjangoDeploymentState,
-        *, cfg: dict, activation_callback=None,
+        *, cfg: dict, activation_callback=None, task_id: str | None = None,
+        deployment_lock=None,
     ):
         service = deploy_item.service
         # cfg is resolved by _process_deployment and explicitly handed to this
@@ -1353,6 +1490,7 @@ class DeployService:
                 build_resource_policy=build_resource_policy,
                 build_options=build_options,
                 runtime_options=runtime_options,
+                deployment_lock=deployment_lock,
                 networks=networks,
                 volume_specs=volume_specs,
                 endpoint_specs=endpoint_specs,
@@ -1507,6 +1645,13 @@ class DeployService:
         except Exception:
             pass
 
+        try:
+            deployer._ownership_check = lambda: self._assert_legacy_execution_owner(  # type: ignore[attr-defined]
+                deploy_item, task_id, deployment_lock
+            )
+        except Exception:
+            pass
+
         result = deployer.deploy_result()
         state_tracker.finish(result)
 
@@ -1563,6 +1708,43 @@ class DeployService:
             )
         return result
 
+    @staticmethod
+    def _assert_legacy_execution_owner(deploy_item, task_id, deployment_lock=None) -> None:
+        """Fence legacy Docker operations against session loss and newer intent."""
+        if deployment_lock is not None and not deployment_lock.assert_held():
+            raise StaleDeploymentWorkerError(
+                "Deployment worker lost its per-service advisory lock.",
+                details={"deployment_id": str(deploy_item.pk)},
+            )
+        expected_generation = getattr(deploy_item, "expected_lifecycle_generation", None)
+        expected_revision = str(getattr(deploy_item, "expected_active_revision_id", "") or "")
+        intent = Service.objects.filter(pk=deploy_item.service_id).values(
+            "lifecycle_generation", "active_revision_id", "task_id", "desired_state"
+        ).first()
+        current_deploy = Deploy.objects.filter(pk=deploy_item.pk).values(
+            "status", "execution_task_id"
+        ).first()
+        if (
+            intent is None
+            or current_deploy is None
+            or expected_generation is None
+            or int(intent["lifecycle_generation"] or 0) != int(expected_generation)
+            or str(intent["active_revision_id"] or "") != expected_revision
+            or str(intent["task_id"] or "") != str(task_id or "")
+            or str(current_deploy["execution_task_id"] or "") != str(task_id or "")
+            or str(current_deploy["status"] or "") != "running"
+        ):
+            raise StaleDeploymentWorkerError(
+                "Deployment worker no longer owns the current service intent.",
+                details={
+                    "deployment_id": str(deploy_item.pk),
+                    "expected_lifecycle_generation": expected_generation,
+                    "actual_lifecycle_generation": (
+                        intent.get("lifecycle_generation") if intent else None
+                    ),
+                },
+            )
+
     def _execute_native_swarm_lifecycle(
         self,
         deploy_item,
@@ -1571,6 +1753,7 @@ class DeployService:
         *,
         cfg: dict,
         execution_plan,
+        deployment_lock=None,
         dockerfile_text: str,
         zip_path: str,
         platform: str,
@@ -1706,7 +1889,12 @@ class DeployService:
             worker_task_id=str(getattr(deploy_item, "execution_task_id", "") or "") or None,
             operation_key=operation_key,
             expected_lifecycle_generation=int(
-                getattr(getattr(deploy_item, "service", None), "lifecycle_generation", 0) or 0
+                getattr(deploy_item, "expected_lifecycle_generation", 0) or 0
+            ),
+            current_lifecycle_generation=lambda sid=str(deploy_item.service_id): (
+                Service.objects.filter(pk=sid)
+                .values_list("lifecycle_generation", flat=True)
+                .first()
             ),
             expected_previous_deploy_id=(
                 str(getattr(deploy_item, "previous_deploy_id", "") or "") or None
@@ -1716,7 +1904,9 @@ class DeployService:
                 selection,
                 required_capabilities=execution_plan.required_capabilities,
             ),
-            owns_execution=lambda: StateManager.heartbeat_deploy(
+            owns_execution=lambda: (
+                deployment_lock is None or deployment_lock.assert_held()
+            ) and StateManager.heartbeat_deploy(
                 deploy_item.pk,
                 task_id=getattr(deploy_item, "execution_task_id", None),
                 stage="native_execution",
@@ -1731,6 +1921,10 @@ class DeployService:
         store = DjangoDeploymentLifecycleStore(
             int(deploy_item.pk),
             task_id=getattr(deploy_item, "execution_task_id", None),
+            expected_active_revision_id=str(
+                getattr(deploy_item, "expected_active_revision_id", "") or ""
+            ),
+            allow_active_revision_replacement=True,
         )
         runtime = resolver.registry.resolve_adapter(selection)
 

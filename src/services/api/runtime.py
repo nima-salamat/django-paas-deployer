@@ -36,6 +36,7 @@ from services.revisioning import get_active_deploy
 from deployments.core.manager.container_manager import Container
 from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from deployments.core.manager.client_manager import Client
+from deployments.common.exceptions import StaleDeploymentWorkerError
 from docker.errors import NotFound as DockerNotFound
 
 
@@ -467,6 +468,9 @@ def start_service_apiview(request):
                 else "Deployment queued.",
                 error_message="",
                 cancel_requested=False,
+                expected_lifecycle_generation=lifecycle_generation,
+                expected_active_revision_id=str(service_item.active_revision_id or ""),
+                worker_recovery_attempts=0,
             )
 
             def _enqueue_after_commit() -> None:
@@ -672,8 +676,14 @@ def stop_service_apiview(request):
     )
 
 
-def _force_cancel_runtime_cleanup(service, *, container_name: str, deploy=None) -> dict:
-    """Cancel only artifacts belonging to the target deployment."""
+def _force_cancel_runtime_cleanup(
+    service,
+    *,
+    container_name: str,
+    deploy=None,
+    ownership_check=None,
+) -> dict:
+    """Remove only journaled runtime resources exclusively owned by a deploy."""
     report = {
         "runtime": "docker-swarm" if swarm_enabled() else "docker",
         "target_deploy": getattr(deploy, "pk", None),
@@ -685,71 +695,104 @@ def _force_cancel_runtime_cleanup(service, *, container_name: str, deploy=None) 
     }
     deploy_id = str(getattr(deploy, "pk", "")) if deploy is not None else ""
 
+    def assert_owner() -> None:
+        if callable(ownership_check) and not ownership_check():
+            raise StaleDeploymentWorkerError(
+                "Force-cancel cleanup no longer owns the current lifecycle generation.",
+                details={"service_id": str(service.pk), "deploy_id": deploy_id},
+            )
+
+    assert_owner()
+
+    # A stable Swarm service may have been updated in place. When a previous
+    # revision remains authoritative, the service is shared runtime state and
+    # must be restored by desired-state reconciliation instead of deleted.
+    if getattr(service, "active_revision_id", None):
+        report["preserved_for_active_revision"] = str(service.active_revision_id)
+        return report
+
     if swarm_enabled():
         try:
             runtime = SwarmRuntime()
-            names = runtime.service_names_for_service(str(service.pk))
-            for name in names:
+            from deploy.models import DeploymentResource
+            resources = DeploymentResource.objects.filter(
+                deployment_id=getattr(deploy, "pk", None),
+                kind="runtime_service",
+                owned=True,
+            ).exclude(state="retired")
+            for resource in resources:
+                assert_owner()
+                name = str(resource.name or "").strip()
+                if not name:
+                    continue
                 try:
-                    docker_service = runtime.client.services.get(name)
+                    try:
+                        docker_service = runtime.client.services.get(name)
+                    except DockerNotFound:
+                        report["services"].append({"name": name, "result": "absent"})
+                        resource.state = "retired"
+                        resource.retired_at = timezone.now()
+                        resource.last_error = ""
+                        resource.save(update_fields=["state", "retired_at", "last_error", "updated_at"])
+                        continue
                     labels = ((docker_service.attrs or {}).get("Spec") or {}).get("Labels") or {}
                     owner = str(labels.get("passdeployer.deployment") or "")
-                    if deploy_id and owner not in {"", deploy_id}:
+                    service_owner = str(labels.get("passdeployer.service") or "")
+                    if owner != deploy_id or service_owner != str(service.pk):
+                        report["services"].append({"name": name, "result": "not_owned"})
+                        report["errors"].append(
+                            f"swarm service {name}: ownership labels do not match the cancelled deployment."
+                        )
                         continue
+                    assert_owner()
                     runtime.remove(name)
                     report["services"].append({"name": name, "result": "removed"})
+                    resource.state = "retired"
+                    resource.retired_at = timezone.now()
+                    resource.last_error = ""
+                    resource.save(update_fields=["state", "retired_at", "last_error", "updated_at"])
                 except Exception as exc:
+                    if isinstance(exc, StaleDeploymentWorkerError):
+                        raise
                     report["errors"].append(f"swarm service {name}: {exc}")
         except Exception as exc:
+            if isinstance(exc, StaleDeploymentWorkerError):
+                raise
             report["errors"].append(f"swarm runtime: {exc}")
         return report
 
+    assert_owner()
     try:
         client = Client()()
     except Exception as exc:
         report["errors"].append(f"docker client: {exc}")
         return report
 
-    version = str(getattr(deploy, "version", "latest")) if deploy is not None else "latest"
-    try:
-        from deployments.celery.services.deploy_service import _docker_tag_from_deploy
-        from deployments.common.docker_identity import canonical_image_ref
-        target_image = canonical_image_ref(container_name, _docker_tag_from_deploy(version))
-    except Exception:
-        target_image = None
-
     try:
         candidates = client.containers.list(all=True)
         for c in candidates:
+            assert_owner()
             labels = dict(getattr(c, "labels", {}) or {})
-            cid = str(labels.get("deployment.id") or "")
-            if deploy_id and cid != deploy_id:
+            cid = str(labels.get("deployment.id") or labels.get("io.passdeployer.deployment") or "")
+            if not deploy_id or cid != deploy_id:
                 continue
-            if not deploy_id:
-                cname = (getattr(c, "name", "") or "").lstrip("/")
-                if cname != container_name:
-                    continue
             cname = (getattr(c, "name", "") or "").lstrip("/")
             try:
+                assert_owner()
                 if getattr(c, "status", "") == "running":
                     c.stop(timeout=5)
+                assert_owner()
                 c.remove(force=True)
                 report["intermediate_containers"].append({"name": cname, "result": "removed"})
             except Exception as exc:
+                if isinstance(exc, StaleDeploymentWorkerError):
+                    raise
                 report["errors"].append(f"container {cname}: {exc}")
     except Exception as exc:
+        if isinstance(exc, StaleDeploymentWorkerError):
+            raise
         report["errors"].append(f"list containers: {exc}")
 
-    if target_image:
-        try:
-            client.images.remove(target_image, force=True)
-            report["images"].append({"ref": target_image, "result": "removed"})
-        except Exception as exc:
-            msg = str(exc).lower()
-            result = "absent" if "not found" in msg or "no such image" in msg else f"error: {exc}"
-            report["images"].append({"ref": target_image, "result": result})
-            if result.startswith("error"):
-                report["errors"].append(f"image {target_image}: {exc}")
     return report
 
 
@@ -760,7 +803,8 @@ def force_cancel_deploy_apiview(request):
     """Immediately cancel one active deployment and publish terminal state.
 
     Body accepts ``deploy_id`` (preferred) or ``service_id`` (legacy).
-    The operation is idempotent for an already-cancelled deployment.
+    The API fences the worker immediately and schedules ownership-checked
+    cleanup after the per-service deployment lock becomes available.
     """
     deploy_id = request.data.get("deploy_id")
     service_id = request.data.get("service_id")
@@ -831,6 +875,12 @@ def force_cancel_deploy_apiview(request):
             or None
         )
         from deployments.core.state.manager import StateManager
+        from services.lifecycle.fencing import bump_lifecycle
+        desired_state = "running" if service_item.active_revision_id else "stopped"
+        lifecycle_generation = bump_lifecycle(
+            service_item.pk,
+            desired_state=desired_state,
+        )
         StateManager.transition_deploy_system_terminal(
             locked.pk,
             DeploymentStatusChoices.CANCELLED,
@@ -855,62 +905,60 @@ def force_cancel_deploy_apiview(request):
                 "progress": 100,
                 "details": {"controlled_by": "force_cancel_api"},
             },
+            expected_execution_task_id=str(locked.execution_task_id or ""),
+            expected_lifecycle_generation=lifecycle_generation,
+            project_service=False,
         )
+        StateManager.transition_service(
+            service_item.pk,
+            SERVICE_STATUS_CHOICES.RUNNING if service_item.active_revision_id else SERVICE_STATUS_CHOICES.STOPPING,
+            update_fields={
+                "desired_state": desired_state,
+                "task_id": None,
+                "deploy_started": None,
+            },
+            allow_runtime_reconciliation=bool(service_item.active_revision_id),
+            expected_lifecycle_generation=lifecycle_generation,
+        )
+        service_item.refresh_from_db()
         selected = locked
 
     revoke_result = "not_requested"
     if task_id:
         try:
             from celery import current_app
-            current_app.control.revoke(str(task_id), terminate=True, signal="SIGTERM")
-            revoke_result = "revoked"
+            current_app.control.revoke(str(task_id), terminate=False)
+            revoke_result = "revocation_requested"
         except Exception as exc:
             revoke_result = f"revoke_error: {exc}"
             logger.warning("force_cancel: revoke failed task=%s: %s", task_id, exc)
 
-    docker_report = _force_cancel_runtime_cleanup(service_item, container_name=service_item.get_docker_service_name(), deploy=selected)
-
-    # Clear task metadata only if it still points to the cancelled task.
-    # Reconcile the service state instead of blindly marking STOPPED. A force
-    # cancel may happen while an older successful container is still serving.
+    cleanup_task_id = None
     try:
-        if swarm_enabled():
-            runtime_state = SwarmRuntime().inspect_service(service_item.get_docker_service_name())
-            running = bool(
-                runtime_state
-                and runtime_state.replicas_desired > 0
-                and runtime_state.replicas_running == runtime_state.replicas_desired
-            )
-        else:
-            running = Container.container_is_running(service_item.get_docker_service_name())
-    except Exception:
-        running = False
-    fallback_status = SERVICE_STATUS_CHOICES.RUNNING if running else SERVICE_STATUS_CHOICES.STOPPED
-    service_qs = Service.objects.filter(pk=service_item.pk)
-    if task_id:
-        service_qs = service_qs.filter(task_id=task_id)
-    else:
-        service_qs = service_qs.filter(task_id__in=("", None))
-    service_qs.update(
-        task_id=None, deploy_started=None, status=fallback_status
-    )
-
-    # Release any base-image leases held by this deployment. If the operator
-    # disabled retention, an unshared newly-built base can now be removed.
-    try:
-        from deploy.base_images import base_image_settings, release_base_image_leases
-        release_base_image_leases(
-            str(selected.pk),
-            remove_if_unretained=not base_image_settings()["retain_after_deploy"],
+        from deployments.celery.tasks import force_cancel_deploy_cleanup
+        queued = force_cancel_deploy_cleanup.apply_async(
+            args=[str(service_item.pk), int(selected.pk), int(lifecycle_generation)],
+            queue="operations",
         )
+        cleanup_task_id = str(getattr(queued, "id", "") or "") or None
     except Exception as exc:
-        logger.warning("force_cancel: failed to release base-image leases for deploy %s: %s", selected.pk, exc)
+        logger.exception("Unable to queue force-cancel cleanup for deploy=%s", selected.pk)
+        Deploy.objects.filter(pk=selected.pk, status=DeploymentStatusChoices.CANCELLED).update(
+            cleanup_status="pending",
+            reconciliation_required=True,
+            cleanup_failures=[{"error": str(exc)[:1000]}],
+            updated_at=timezone.now(),
+        )
 
     return Response({
-        "result": "success" if not docker_report["errors"] else "partial",
-        "detail": _("Deployment force-cancelled and its deployment-scoped runtime artifacts were cleaned up."),
-        "deploy_id": str(selected.pk), "task_id": task_id, "revoke": revoke_result, "report": docker_report,
-    }, status=status.HTTP_200_OK)
+        "result": "success" if cleanup_task_id else "partial",
+        "detail": _("Deployment cancellation was accepted; owned cleanup is queued and the active release is preserved."),
+        "deploy_id": str(selected.pk),
+        "task_id": task_id,
+        "revoke": revoke_result,
+        "cleanup_task_id": cleanup_task_id,
+        "lifecycle_generation": lifecycle_generation,
+    }, status=status.HTTP_202_ACCEPTED)
 
 
 @api_view(["POST"])

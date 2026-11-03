@@ -47,7 +47,7 @@ class ReleaseRollbackService:
             return
 
         service_id = deploy_row.service_id
-        with acquire_service_deployment_lock(service_id):
+        with acquire_service_deployment_lock(service_id) as deployment_lock:
             claimed = StateManager.lock_and_get_deployment(
                 int(deploy_row.pk),
                 task_id=str(task_id),
@@ -272,12 +272,15 @@ class ReleaseRollbackService:
                     deploy.pk,
                     task_id=str(task_id),
                     stage="rollback",
-                ),
+                ) and deployment_lock.assert_held(),
                 cancellation_requested=lambda: bool(
                     Deploy.objects.filter(pk=deploy.pk)
                     .values_list("cancel_requested", flat=True)
                     .first()
                 ),
+                current_lifecycle_generation=lambda: Service.objects.filter(
+                    pk=service.pk
+                ).values_list("lifecycle_generation", flat=True).first(),
                 publish=publish,
             )
             strategy = CallbackDeploymentStrategy(
@@ -303,6 +306,34 @@ class ReleaseRollbackService:
 
             now = timezone.now()
             if result.success:
+                latest_service = Service.objects.select_for_update().filter(pk=service.pk).first()
+                if (
+                    latest_service is None
+                    or int(latest_service.lifecycle_generation or 0) != int(expected_lifecycle_generation)
+                    or str(latest_service.active_revision_id or "") != str(target_release.revision_id)
+                ):
+                    Deploy.objects.filter(pk=deploy.pk).update(
+                        reconciliation_required=True,
+                        status_message="Rollback activation committed but its service projection requires reconciliation.",
+                        updated_at=now,
+                    )
+                    logger.error(
+                        "Rollback attempt=%s completed with a stale service projection; reconciliation required.",
+                        deploy.pk,
+                    )
+                    return
+                if latest_service.status != "running":
+                    StateManager.transition_service(
+                        service.pk,
+                        "running",
+                        update_fields={
+                            "desired_state": "running",
+                            "task_id": None,
+                            "deploy_started": None,
+                        },
+                        allow_runtime_reconciliation=True,
+                        expected_lifecycle_generation=expected_lifecycle_generation,
+                    )
                 Deploy.objects.filter(pk=deploy.pk).update(
                     rollback_status=RollbackStatusChoices.SUCCEEDED,
                     stage="rollback_completed",

@@ -23,6 +23,7 @@ from deployments.common.docker_identity import (
     validate_image_repository,
 )
 from deployments.common.retry import classify_docker_exception
+from deployments.common.exceptions import StaleDeploymentWorkerError
 from .client_manager import Client, docker_client_diagnostics
 
 logger = logging.getLogger(__name__)
@@ -522,6 +523,7 @@ class Image(Client):
         image_id: Optional[str] = None
         cancelled = threading.Event()
         timed_out = threading.Event()
+        stale_owner = threading.Event()
         watcher = None
         timeout_watcher = None
 
@@ -562,6 +564,8 @@ class Image(Client):
             def _watch_cancel():
                 while not cancelled.wait(0.25):
                     try:
+                        if ownership_check is not None:
+                            ownership_check()
                         if cancel_check():
                             cancelled.set()
                             try:
@@ -569,6 +573,14 @@ class Image(Client):
                             except Exception:
                                 pass
                             return
+                    except StaleDeploymentWorkerError:
+                        stale_owner.set()
+                        cancelled.set()
+                        try:
+                            response.close()
+                        except Exception:
+                            pass
+                        return
                     except Exception:
                         # Cancellation checks are best-effort; the deployment
                         # must not fail merely because the DB check is unavailable.
@@ -590,6 +602,10 @@ class Image(Client):
                     lease_check()
                 if ownership_check is not None:
                     ownership_check()
+                if stale_owner.is_set():
+                    raise StaleDeploymentWorkerError(
+                        "Deployment worker lost lifecycle ownership during the Docker build."
+                    )
                 if cancelled.is_set():
                     from deployments.common.exceptions import DeploymentCancelled
                     raise DeploymentCancelled(
@@ -926,6 +942,8 @@ class Image(Client):
                             except ImageNotFound:
                                 return self.client.images.get(image_id)
 
+                        except StaleDeploymentWorkerError:
+                            raise
                         except BuildError:
                             # A real build stream error means the builder started
                             # processing the request. Re-running the build may
@@ -1019,6 +1037,8 @@ class Image(Client):
                                 i + 1, type(exc).__name__, str(exc),
                             )
                             break
+                        except StaleDeploymentWorkerError:
+                            raise
                         except Exception as exc:
                             last_err = exc
                             failure = classify_docker_exception(exc, stage="image_build")

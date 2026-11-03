@@ -47,6 +47,7 @@ from deployments.common import parse_config, as_bool
 from deployments.common.exceptions import (
     DeploymentError,
     DeploymentCancelled,
+    DeploymentLockError,
     StaleDeploymentWorkerError,
     InvalidServiceStateError,
     DeploymentValidationError,
@@ -65,6 +66,134 @@ from .services.stop_service import StopService
 from .schedules import monitor_services  # noqa: F401  — re-export for beat
 
 logger = logging.getLogger(__name__)
+
+
+@shared_task(
+    bind=True,
+    max_retries=5,
+    default_retry_delay=10,
+    name="deployments.celery.tasks.force_cancel_deploy_cleanup",
+)
+def force_cancel_deploy_cleanup(self, service_id: str, deploy_id: int, lifecycle_generation: int) -> None:
+    """Clean a cancelled first-deploy runtime after acquiring its service lock."""
+    from deployments.core.state.locks import acquire_service_deployment_lock
+    from services.api.runtime import _force_cancel_runtime_cleanup
+
+    try:
+        with acquire_service_deployment_lock(service_id) as deployment_lock:
+            service = Service.objects.filter(pk=service_id).first()
+            deploy = Deploy.objects.filter(pk=deploy_id, service_id=service_id).first()
+            if service is None or deploy is None:
+                return
+            expected_revision = str(service.active_revision_id or "")
+            expected_desired_state = "running" if expected_revision else "stopped"
+            if (
+                int(service.lifecycle_generation or 0) != int(lifecycle_generation)
+                or str(service.desired_state or "").lower()
+                != expected_desired_state
+            ):
+                logger.info(
+                    "Skipping force-cancel cleanup for service=%s deploy=%s because its lifecycle intent changed.",
+                    service_id, deploy_id,
+                )
+                return
+
+            def owns_cleanup() -> bool:
+                if not deployment_lock.assert_held():
+                    return False
+                filters = {
+                    "pk": service_id,
+                    "lifecycle_generation": int(lifecycle_generation),
+                    "desired_state": expected_desired_state,
+                }
+                if expected_revision:
+                    filters["active_revision_id"] = expected_revision
+                else:
+                    filters["active_revision__isnull"] = True
+                return Service.objects.filter(**filters).exists()
+
+            if service.active_revision_id:
+                report = {
+                    "preserved_for_active_revision": str(service.active_revision_id),
+                    "errors": [],
+                }
+            else:
+                report = _force_cancel_runtime_cleanup(
+                    service,
+                    container_name=service.get_docker_service_name(),
+                    deploy=deploy,
+                    ownership_check=owns_cleanup,
+                )
+            if not owns_cleanup():
+                logger.info(
+                    "Skipping stale force-cancel projection for service=%s deploy=%s.",
+                    service_id,
+                    deploy_id,
+                )
+                return
+            cleanup_status = "critical" if report["errors"] else (
+                "pending" if service.active_revision_id else "clean"
+            )
+            with transaction.atomic():
+                locked_service = Service.objects.select_for_update().filter(pk=service_id).first()
+                locked_deploy = Deploy.objects.select_for_update().filter(
+                    pk=deploy_id,
+                    service_id=service_id,
+                    status=DeploymentStatusChoices.CANCELLED,
+                ).first()
+                if (
+                    locked_service is None
+                    or locked_deploy is None
+                    or int(locked_service.lifecycle_generation or 0) != int(lifecycle_generation)
+                    or str(locked_service.desired_state or "").lower() != expected_desired_state
+                    or str(locked_service.active_revision_id or "") != expected_revision
+                ):
+                    return
+                Deploy.objects.filter(pk=locked_deploy.pk).update(
+                    cleanup_status=cleanup_status,
+                    cleanup_failures=list(report["errors"]),
+                    reconciliation_required=bool(report["errors"] or locked_service.active_revision_id),
+                    updated_at=timezone.now(),
+                )
+                if report["errors"]:
+                    StateManager.transition_service(
+                        locked_service.pk,
+                        SERVICE_STATUS_CHOICES.FAILED,
+                        update_fields={"desired_state": "stopped", "task_id": None, "deploy_started": None},
+                        expected_lifecycle_generation=lifecycle_generation,
+                    )
+                elif not locked_service.active_revision_id:
+                    StateManager.transition_service(
+                        locked_service.pk,
+                        SERVICE_STATUS_CHOICES.STOPPED,
+                        update_fields={"desired_state": "stopped", "task_id": None, "deploy_started": None},
+                        expected_lifecycle_generation=lifecycle_generation,
+                    )
+            try:
+                from deploy.base_images import base_image_settings, release_base_image_leases
+                release_base_image_leases(
+                    str(deploy.pk),
+                    remove_if_unretained=not base_image_settings()["retain_after_deploy"],
+                )
+            except Exception:
+                logger.exception("Could not release base image leases for cancelled deploy=%s", deploy.pk)
+    except StaleDeploymentWorkerError:
+        logger.info(
+            "Force-cancel cleanup lost lifecycle ownership for service=%s deploy=%s.",
+            service_id,
+            deploy_id,
+        )
+        return
+    except DeploymentLockError as exc:
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=self.default_retry_delay)
+        logger.exception("Force-cancel cleanup exhausted lock retries for deploy=%s", deploy_id)
+        Deploy.objects.filter(pk=deploy_id, status=DeploymentStatusChoices.CANCELLED).update(
+            cleanup_status="critical",
+            reconciliation_required=True,
+            cleanup_failures=[{"error": "Deployment lock remained held beyond cleanup retry limit."}],
+            updated_at=timezone.now(),
+        )
 
 
 def _finalize_owned_deployment_failure(deploy_id, task_id: str, error: DeploymentError) -> bool:
@@ -1260,13 +1389,21 @@ def _mark_success(
         "details": {"runtime": "database", "controlled_by": "db_deployer"},
     }
 
+    activation_outcome: dict[str, str] = {}
     committed = StateManager.activate_revision_and_succeed(
         deploy.pk,
         deploy.revision_id,
         task_id=task_id,
-        expected_lifecycle_generation=expected_lifecycle_generation,
+        expected_lifecycle_generation=(
+            int(deploy.expected_lifecycle_generation)
+            if deploy.expected_lifecycle_generation is not None
+            else expected_lifecycle_generation
+        ),
         expected_previous_deploy_id=expected_previous_deploy_id,
         enforce_previous_deploy=True,
+        expected_active_revision_id=str(deploy.expected_active_revision_id or ""),
+        allow_active_revision_replacement=True,
+        outcome=activation_outcome,
         update_fields={
             "stage": "finished",
             "progress": 100,
@@ -1276,7 +1413,51 @@ def _mark_success(
         event_payload=event_payload,
     )
     if not committed:
-        logger.info("Ignoring stale/cancelled DB deploy success for deploy=%s", deploy.pk)
+        outcome = activation_outcome.get("value")
+        if outcome == "cancelled":
+            StateManager.transition_deploy_system_terminal(
+                deploy.pk,
+                DeploymentStatusChoices.CANCELLED,
+                update_fields={
+                    "stage": "cancelled",
+                    "progress": 100,
+                    "status_message": "Database deployment cancelled before activation.",
+                    "reconciliation_required": True,
+                },
+                expected_execution_task_id=str(task_id or ""),
+                project_service=True,
+                event_payload={
+                    **event_payload,
+                    "event_type": "deployment.cancelled.warning",
+                    "stage": "cancelled",
+                    "level": "warning",
+                    "message": "Database deployment cancelled before activation.",
+                    "details": {"runtime": "database", "activation_outcome": outcome},
+                },
+            )
+        elif outcome == "activation_conflict":
+            StateManager.transition_deploy_system_terminal(
+                deploy.pk,
+                DeploymentStatusChoices.FAILED,
+                update_fields={
+                    "stage": "activation_conflict",
+                    "progress": 100,
+                    "status_message": "Database deployment completed but activation was fenced by a newer service state.",
+                    "error_message": "Active revision or authoritative deployment changed before activation.",
+                    "reconciliation_required": True,
+                },
+                expected_execution_task_id=str(task_id or ""),
+                project_service=False,
+                event_payload={
+                    **event_payload,
+                    "event_type": "deployment.activation_conflict.error",
+                    "stage": "activation_conflict",
+                    "level": "error",
+                    "message": "Database deployment completed but activation was fenced by a newer service state.",
+                    "details": {"runtime": "database", "activation_outcome": outcome},
+                },
+            )
+        logger.info("Refused DB deploy success for deploy=%s outcome=%s", deploy.pk, outcome)
         return
 
     logger.info("DB deploy succeeded: deploy=%s service=%s", deploy.pk, service.pk)
@@ -1410,6 +1591,38 @@ def _lock_for_db_deploy(
             logger.error("run_db_deploy: Deploy %s has no service", deploy_id)
             return None
 
+        expected_generation = getattr(deploy, "expected_lifecycle_generation", None)
+        if expected_generation is None or int(service.lifecycle_generation or 0) != int(expected_generation):
+            StateManager.transition_deploy_system_terminal(
+                deploy.pk,
+                DeploymentStatusChoices.CANCELLED,
+                update_fields={
+                    "stage": "stale_intent",
+                    "progress": 100,
+                    "status_message": "Database deployment was superseded by a newer service lifecycle intent.",
+                    "reconciliation_required": True,
+                },
+                project_service=False,
+                event_payload={
+                    "event_id": str(uuid.uuid4()),
+                    "trace_id": str(deploy.pk),
+                    "deployment_id": str(deploy.pk),
+                    "service_id": str(deploy.service_id),
+                    "revision_id": str(deploy.revision_id or ""),
+                    "task_id": str(task_id or ""),
+                    "event_type": "deployment.cancelled.warning",
+                    "stage": "stale_intent",
+                    "level": "warning",
+                    "message": "Database deployment was superseded by a newer service lifecycle intent.",
+                    "progress": 100,
+                    "details": {
+                        "expected_lifecycle_generation": expected_generation,
+                        "actual_lifecycle_generation": int(service.lifecycle_generation or 0),
+                    },
+                },
+            )
+            return None
+
         expected_owner = str(task_id or "")
         if expected_owner and deploy.execution_task_id not in ("", expected_owner):
             logger.info("run_db_deploy: skipping deploy=%s — stale task owner %s (current=%s)", deploy_id, expected_owner, deploy.execution_task_id)
@@ -1431,7 +1644,32 @@ def _lock_for_db_deploy(
             and service.task_id == expected_owner
         )
         if owned_retry:
+            deploy.worker_heartbeat_at = timezone.now()
+            deploy.stage = "retrying"
+            deploy.status_message = "Retrying a recoverable database deployment operation."
+            deploy.save(update_fields=["worker_heartbeat_at", "stage", "status_message", "updated_at"])
             deploy.refresh_from_db()
+            return deploy, service
+
+        same_running_owner = (
+            expected_owner
+            and service.status == SERVICE_STATUS_CHOICES.DEPLOYING
+            and deploy.status == DeploymentStatusChoices.RUNNING
+            and deploy.execution_task_id == expected_owner
+            and service.task_id == expected_owner
+            and not deploy.cancel_requested
+        )
+        if same_running_owner:
+            deploy.worker_recovery_attempts = int(deploy.worker_recovery_attempts or 0) + 1
+            deploy.worker_heartbeat_at = timezone.now()
+            deploy.stage = "retrying"
+            deploy.status_message = "Recovering a database deployment after worker interruption."
+            deploy.save(update_fields=[
+                "worker_recovery_attempts", "worker_heartbeat_at", "stage",
+                "status_message", "updated_at",
+            ])
+            service._worker_recovery_exhausted = deploy.worker_recovery_attempts > 3
+            deploy._worker_recovery_exhausted = service._worker_recovery_exhausted
             return deploy, service
 
         if service.status != SERVICE_STATUS_CHOICES.QUEUED:
@@ -1456,6 +1694,7 @@ def _lock_for_db_deploy(
             update_fields={"deploy_started": now, "task_id": str(task_id or "")},
         )
         deploy.execution_task_id = str(task_id) if task_id else ""
+        deploy.worker_recovery_attempts = 0
         StateManager.transition_deploy(
             deploy.pk, DeploymentStatusChoices.RUNNING,
             update_fields={
@@ -1463,6 +1702,7 @@ def _lock_for_db_deploy(
                 "execution_task_id": str(task_id or ""),
                 "stage": "starting", "progress": 5,
                 "status_message": "Database deployment in progress.",
+                "worker_recovery_attempts": 0,
             },
         )
         deploy.refresh_from_db()
@@ -1476,6 +1716,28 @@ def _lock_for_db_deploy(
     name="deployments.celery.tasks.run_db_deploy",
 )
 def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> None:
+    """Hold the Service advisory lock across DB claim and Docker execution."""
+    service_id = (
+        Deploy.objects.filter(pk=deploy_id)
+        .values_list("service_id", flat=True)
+        .first()
+    )
+    if service_id is None:
+        logger.error("run_db_deploy: Deploy %s does not exist", deploy_id)
+        return
+    try:
+        with acquire_service_deployment_lock(service_id):
+            return _run_db_deploy_locked(self, deploy_id, force_reinit)
+    except DeploymentLockError as exc:
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=self.default_retry_delay)
+        logger.info(
+            "run_db_deploy could not acquire service lock after retries; leaving deploy=%s for monitor recovery.",
+            deploy_id,
+        )
+
+
+def _run_db_deploy_locked(self, deploy_id: str | int, force_reinit: bool = False) -> None:
     """Execute a database-platform deployment via DBDeployer.
 
     Parameters
@@ -1499,6 +1761,33 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
         return
 
     deploy, service = locked
+    if getattr(deploy, "_worker_recovery_exhausted", False):
+        committed = StateManager.transition_deploy_system_terminal(
+            deploy.pk,
+            DeploymentStatusChoices.FAILED,
+            update_fields={
+                "stage": "worker_recovery_exhausted",
+                "progress": 100,
+                "status_message": "Database deployment recovery limit was exceeded.",
+                "error_message": "The worker repeatedly exited before completing the deployment.",
+                "reconciliation_required": True,
+                "cleanup_status": "pending",
+            },
+            expected_execution_task_id=str(self.request.id),
+            expected_lifecycle_generation=deploy.expected_lifecycle_generation,
+            project_service=False,
+        )
+        if committed:
+            try:
+                StateManager.transition_service(
+                    service.pk,
+                    SERVICE_STATUS_CHOICES.FAILED,
+                    update_fields={"task_id": None, "deploy_started": None},
+                    expected_lifecycle_generation=deploy.expected_lifecycle_generation,
+                )
+            except InvalidServiceStateError:
+                logger.info("Service projection changed during exhausted DB worker recovery deploy=%s", deploy.pk)
+        return
     deploy = ensure_revision_for_deploy(deploy)
     deploy.refresh_from_db(fields=["revision"])
     service = Service.objects.select_related("plan", "network").get(pk=service.pk)
@@ -1576,8 +1865,23 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
     # somehow passes (e.g. the original task crashed after releasing
     # the row but before completing Docker work).
     try:
-        with acquire_service_deployment_lock(service.pk):
+        with acquire_service_deployment_lock(service.pk) as deployment_lock:
+            expected_generation = int(deploy.expected_lifecycle_generation)
+            expected_revision = str(deploy.expected_active_revision_id or "")
+
             def ownership_check() -> bool:
+                if not deployment_lock.assert_held():
+                    return False
+                current_intent = Service.objects.filter(pk=service.pk).values(
+                    "lifecycle_generation", "active_revision_id", "desired_state"
+                ).first()
+                if (
+                    not current_intent
+                    or int(current_intent["lifecycle_generation"] or 0) != expected_generation
+                    or str(current_intent["active_revision_id"] or "") != expected_revision
+                    or str(current_intent["desired_state"] or "").lower() != "running"
+                ):
+                    return False
                 return StateManager.heartbeat_deploy(
                     deploy.pk,
                     task_id=str(self.request.id),
@@ -1585,6 +1889,8 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
                 )
 
             def cancel_check() -> bool:
+                if not deployment_lock.assert_held():
+                    return True
                 current = Deploy.objects.filter(pk=deploy.pk).values(
                     "cancel_requested", "status"
                 ).first()
@@ -1660,7 +1966,9 @@ def run_db_deploy(self, deploy_id: str | int, force_reinit: bool = False) -> Non
             result.message,
             task_id=str(self.request.id),
             expected_lifecycle_generation=(
-                int(getattr(service, "lifecycle_generation", 0) or 0)
+                int(deploy.expected_lifecycle_generation)
+                if deploy.expected_lifecycle_generation is not None
+                else None
             ),
             expected_previous_deploy_id=(
                 str(getattr(deploy, "previous_deploy_id", "") or "") or None

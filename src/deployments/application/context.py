@@ -33,6 +33,11 @@ class DeploymentExecutionContext:
     operation_key: str
     runtime_selection: RuntimeSelection
     expected_lifecycle_generation: int | None = None
+    current_lifecycle_generation: Callable[[], int | str | None] | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
     expected_previous_deploy_id: str | None = None
     enforce_previous_deploy: bool = False
     owns_execution: Callable[[], bool] = field(default=lambda: True, compare=False, repr=False)
@@ -57,6 +62,22 @@ class DeploymentExecutionContext:
                     "operation_key": self.operation_key,
                 },
             )
+        if (
+            self.expected_lifecycle_generation is not None
+            and self.current_lifecycle_generation is not None
+        ):
+            observed = self.current_lifecycle_generation()
+            if observed is None or int(observed) != int(self.expected_lifecycle_generation):
+                raise StaleDeploymentWorkerError(
+                    "Deployment execution no longer owns the current lifecycle generation.",
+                    details={
+                        "deployment_id": self.deployment_id,
+                        "service_id": self.service_id,
+                        "expected_lifecycle_generation": int(self.expected_lifecycle_generation),
+                        "actual_lifecycle_generation": observed,
+                        "operation_key": self.operation_key,
+                    },
+                )
 
     def assert_can_continue(self) -> None:
         self.assert_owner()
@@ -68,6 +89,16 @@ class DeploymentExecutionContext:
                     "operation_key": self.operation_key,
                 },
             )
+
+    def runtime_cancel_check(self) -> bool:
+        """Cancellation callback that also fences ownership/generation loss."""
+        self.assert_owner()
+        return bool(self.cancellation_requested())
+
+    def runtime_fence_check(self) -> bool:
+        """Runtime callback for cleanup that must ignore the cancel token."""
+        self.assert_owner()
+        return False
 
     def emit(
         self,

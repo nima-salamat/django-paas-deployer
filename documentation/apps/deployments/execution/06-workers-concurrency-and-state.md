@@ -37,6 +37,7 @@ Current settings include:
 
 - prefetch multiplier 1;
 - late acknowledgements;
+- reject-on-worker-lost;
 - broker publish retry;
 - broker startup retry.
 
@@ -74,6 +75,8 @@ The task id becomes the execution fence.
 ### Called by
 
 `DeployService.execute()`, `StopService.execute()`, and database deployment.
+Both application and database workers acquire the lock before claiming the
+Deploy/Service rows and retain it across build or runtime calls.
 
 ### Preconditions
 
@@ -81,7 +84,12 @@ Service id exists.
 
 ### Contract
 
-`acquire_service_deployment_lock()` acquires a PostgreSQL advisory lock keyed by Service id.
+`acquire_service_deployment_lock()` acquires a PostgreSQL session-level
+advisory lock from a deterministic signed 64-bit hash of the canonical Service
+identity. Integer and UUID identities retain distinct canonical forms. The
+lock manager records the owning connection/backend process and verifies that
+the same live PostgreSQL session still holds the lock before authorizing an
+external mutation.
 
 By default it is non-blocking and raises `DeploymentLockError` immediately if another operation owns the Service.
 
@@ -100,6 +108,20 @@ B starts conflicting Docker work
 ```
 
 The advisory lock spans the external work.
+
+The worker-lost setting causes late-acknowledged work to be redelivered after
+worker loss. A redelivered task with the same execution id may reclaim its own
+RUNNING row only after acquiring the Service lock. Recovery attempts are
+persisted on Deploy and capped; an exhausted recovery path writes a terminal
+failure instead of leaving the Service indefinitely DEPLOYING.
+
+Direct Service deletion takes the matching transaction-scoped advisory lock
+inside Django's delete transaction. It conflicts with a worker's session lock
+and is released automatically on commit or rollback. If a deployment still
+owns the Service, the deletion is refused with a conflict response; admin
+deletion uses the same ownership-aware pre-delete cleanup as user deletion.
+The deletion intent advances the lifecycle generation before cleanup so a
+worker that has lost its database session fails its next ownership check.
 
 ### Must not
 
@@ -207,6 +229,11 @@ The state tracker commits a terminal state through the ownership boundary. A sta
 ### If cancellation is already set
 
 A pending deployment can become CANCELLED before runtime work starts.
+
+Force cancellation also advances the Service generation and queues a separate
+cleanup task. That task uses the deployment resource journal and runtime
+identity labels, so a cancelled worker cannot delete resources owned by the
+currently active revision.
 
 ### If ownership is lost
 

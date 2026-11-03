@@ -30,6 +30,13 @@ from deployments.common.exceptions import InvalidServiceStateError
 logger = logging.getLogger(__name__)
 
 
+class ActivationOutcome:
+    ACTIVATED = "activated"
+    CANCELLED = "cancelled"
+    STALE_OWNER = "stale_owner"
+    ACTIVATION_CONFLICT = "activation_conflict"
+
+
 def _sync_ready_app_parent_status(service_id) -> None:
     try:
         from app_catalog.lifecycle import sync_application_status_for_service
@@ -74,6 +81,9 @@ class StateManager:
         *,
         update_fields: Optional[dict] = None,
         allow_runtime_reconciliation: bool = False,
+        expected_lifecycle_generation: int | None = None,
+        expected_active_revision_id: str | None = None,
+        expected_desired_state: str | None = None,
     ) -> None:
         """
         Transition a Service to ``target`` with explicit validation.
@@ -95,6 +105,48 @@ class StateManager:
                 raise InvalidServiceStateError(
                     f"Service {service_id} does not exist.",
                     details={"service_id": service_id},
+                )
+
+            if (
+                expected_lifecycle_generation is not None
+                and int(getattr(service, "lifecycle_generation", 0) or 0)
+                != int(expected_lifecycle_generation)
+            ):
+                raise InvalidServiceStateError(
+                    "Service lifecycle generation changed before the state update.",
+                    details={
+                        "service_id": service_id,
+                        "expected_lifecycle_generation": int(expected_lifecycle_generation),
+                        "actual_lifecycle_generation": int(
+                            getattr(service, "lifecycle_generation", 0) or 0
+                        ),
+                    },
+                )
+            if (
+                expected_active_revision_id is not None
+                and str(service.active_revision_id or "")
+                != str(expected_active_revision_id or "")
+            ):
+                raise InvalidServiceStateError(
+                    "Service active revision changed before the state update.",
+                    details={
+                        "service_id": service_id,
+                        "expected_active_revision_id": str(expected_active_revision_id or ""),
+                        "actual_active_revision_id": str(service.active_revision_id or ""),
+                    },
+                )
+            if (
+                expected_desired_state is not None
+                and str(service.desired_state or "").lower()
+                != str(expected_desired_state or "").lower()
+            ):
+                raise InvalidServiceStateError(
+                    "Service desired state changed before the state update.",
+                    details={
+                        "service_id": service_id,
+                        "expected_desired_state": str(expected_desired_state),
+                        "actual_desired_state": str(service.desired_state or ""),
+                    },
                 )
 
             src = service.status
@@ -315,6 +367,7 @@ class StateManager:
         enforce_previous_deploy: bool = False,
         expected_active_revision_id: str | None = None,
         allow_active_revision_replacement: bool = False,
+        outcome: dict[str, str] | None = None,
         update_fields: Optional[dict] = None,
         event_payload: Optional[dict] = None,
     ) -> bool:
@@ -323,14 +376,19 @@ class StateManager:
         from services.models import Service  # type: ignore
         from services.revisioning import activate_revision_locked
 
+        def rejected(reason: str) -> bool:
+            if outcome is not None:
+                outcome["value"] = reason
+            return False
+
         with transaction.atomic():
             deploy = Deploy.objects.select_for_update().filter(pk=deploy_id).first()
             if deploy is None or sm.is_deploy_terminal(deploy.status):
-                return False
+                return rejected(ActivationOutcome.STALE_OWNER)
             if task_id and str(deploy.execution_task_id or "") != str(task_id):
-                return False
+                return rejected(ActivationOutcome.STALE_OWNER)
             if deploy.cancel_requested:
-                return False
+                return rejected(ActivationOutcome.CANCELLED)
             # Activation is only valid for the immutable revision this Deploy
             # actually executed. Without this check, a caller with a valid
             # running task could accidentally promote an unrelated revision.
@@ -342,11 +400,11 @@ class StateManager:
                     getattr(deploy, "revision_id", None),
                     revision_id,
                 )
-                return False
+                return rejected(ActivationOutcome.ACTIVATION_CONFLICT)
             try:
                 sm.check_deploy_transition(deploy.status, sm.DEPLOY_SUCCEEDED)
             except sm.InvalidTransition:
-                return False
+                return rejected(ActivationOutcome.STALE_OWNER)
 
             service = (
                 Service.objects.select_for_update()
@@ -354,7 +412,7 @@ class StateManager:
                 .first()
             )
             if service is None:
-                return False
+                return rejected(ActivationOutcome.STALE_OWNER)
 
             if expected_lifecycle_generation is not None:
                 actual_generation = int(getattr(service, "lifecycle_generation", 0) or 0)
@@ -366,7 +424,7 @@ class StateManager:
                         expected_lifecycle_generation,
                         actual_generation,
                     )
-                    return False
+                    return rejected(ActivationOutcome.STALE_OWNER)
 
             already_active = (
                 service.active_revision_id is not None
@@ -390,7 +448,7 @@ class StateManager:
                         expected_previous_deploy_id,
                         actual_previous,
                     )
-                    return False
+                    return rejected(ActivationOutcome.ACTIVATION_CONFLICT)
 
             if allow_active_revision_replacement:
                 expected_active_revision = str(expected_active_revision_id or "")
@@ -403,9 +461,9 @@ class StateManager:
                         expected_active_revision,
                         actual_active_revision,
                     )
-                    return False
+                    return rejected(ActivationOutcome.ACTIVATION_CONFLICT)
             elif service.active_revision_id is not None and not already_active:
-                return False
+                return rejected(ActivationOutcome.ACTIVATION_CONFLICT)
 
             activate_revision_locked(service, revision_id)
 
@@ -500,6 +558,8 @@ class StateManager:
                     occurred_at=now,
                     payload=payload,
                 )
+            if outcome is not None:
+                outcome["value"] = ActivationOutcome.ACTIVATED
             return True
 
     @classmethod
@@ -510,6 +570,9 @@ class StateManager:
         *,
         update_fields: Optional[dict] = None,
         event_payload: Optional[dict] = None,
+        expected_execution_task_id: str | None = None,
+        expected_lifecycle_generation: int | None = None,
+        project_service: bool = True,
     ) -> bool:
         """Commit a monitor/operator terminal transition with a durable event."""
         from deploy.models import Deploy, DeploymentEventOutbox  # type: ignore
@@ -517,6 +580,12 @@ class StateManager:
         with transaction.atomic():
             deploy = Deploy.objects.select_for_update().filter(pk=deploy_id).first()
             if deploy is None or sm.is_deploy_terminal(deploy.status):
+                return False
+            if (
+                expected_execution_task_id is not None
+                and str(deploy.execution_task_id or "")
+                != str(expected_execution_task_id or "")
+            ):
                 return False
             if target != sm.DEPLOY_CANCELLED and deploy.cancel_requested:
                 return False
@@ -564,11 +633,16 @@ class StateManager:
                     .filter(pk=deploy.service_id)
                     .first()
                 )
-                cls._project_service_after_cancellation(
-                    service,
-                    task_id=str(deploy.execution_task_id or ""),
-                    details=dict((event_payload or {}).get("details") or update_fields or {}),
-                )
+                if service is not None and (
+                    expected_lifecycle_generation is None
+                    or int(getattr(service, "lifecycle_generation", 0) or 0)
+                    == int(expected_lifecycle_generation)
+                ) and project_service:
+                    cls._project_service_after_cancellation(
+                        service,
+                        task_id=str(deploy.execution_task_id or ""),
+                        details=dict((event_payload or {}).get("details") or update_fields or {}),
+                    )
             return True
 
 
@@ -685,19 +759,24 @@ class StateManager:
                     },
                 )
             from deploy.models import DeploymentStatusChoices  # type: ignore
-            if (
-                allow_owned_retry
-                and task_id
+            same_running_owner = (
+                task_id
                 and str(service.task_id or "") == str(task_id)
                 and str(deploy.execution_task_id or "") == str(task_id)
                 and service.status == SERVICE_STATUS_CHOICES.DEPLOYING
                 and deploy.status == DeploymentStatusChoices.RUNNING
                 and not deploy.cancel_requested
-            ):
-                # A recoverable attempt remains RUNNING/DEPLOYING while Celery
-                # applies its bounded retry policy. Only the same Celery task
-                # identity may reclaim it; a different worker or a terminal row
-                # must never reuse this path.
+            )
+            if same_running_owner:
+                # Celery's explicit retries retain their own bounded retry
+                # counter. A worker lost after late acknowledgement can be
+                # redelivered with retries=0, so count those recoveries durably.
+                recovery_attempts = int(getattr(deploy, "worker_recovery_attempts", 0) or 0)
+                if not allow_owned_retry:
+                    recovery_attempts += 1
+                    Deploy.objects.filter(pk=deploy.pk).update(
+                        worker_recovery_attempts=recovery_attempts,
+                    )
                 Deploy.objects.filter(pk=deploy.pk).update(
                     worker_heartbeat_at=timezone.now(),
                     stage="retrying",
@@ -705,6 +784,7 @@ class StateManager:
                     updated_at=timezone.now(),
                 )
                 deploy.refresh_from_db()
+                deploy._worker_recovery_exhausted = recovery_attempts > 3
                 return deploy
 
             if service.status != SERVICE_STATUS_CHOICES.QUEUED:
@@ -738,11 +818,12 @@ class StateManager:
             deploy.execution_task_id = task_id or deploy.execution_task_id or ""
             deploy.stage = "starting"
             deploy.progress = 0
+            deploy.worker_recovery_attempts = 0
             deploy.save(update_fields=[
                 "status", "started_at", "completed_at",
                 "base_image_wait_started_at", "base_image_ready_at",
                 "application_started_at", "worker_heartbeat_at",
-                "execution_task_id", "stage", "progress",
+                "execution_task_id", "stage", "progress", "worker_recovery_attempts",
             ])
 
             logger.info(

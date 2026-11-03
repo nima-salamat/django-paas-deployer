@@ -72,14 +72,15 @@ def test_service_api_delete_does_not_bypass_signal_ownership_checks():
 
 def test_service_delete_reclaims_only_unshared_application_cache_images():
     source = (ROOT / "services" / "signals.py").read_text(encoding="utf-8")
+    build_cache = (ROOT / "deploy" / "build_cache.py").read_text(encoding="utf-8")
 
     assert "def _cleanup_service_cache_images(service: Service)" in source
     assert "BuildCacheArtifact.objects.filter(" in source
     assert "BaseRuntimeImage.objects.filter(" in source
     assert "client.containers.list()" in source
     assert "image_ids - protected_ids" in source
-    assert "force=False" in source
     assert "release_application_image_references" in source
+    assert "client.images.remove(ref, force=False)" in build_cache
 
 
 def test_cache_cleanup_reads_container_image_id_without_inspecting_image():
@@ -139,6 +140,7 @@ def test_service_swarm_cleanup_uses_pre_delete_instance():
 
 
 def test_service_swarm_cleanup_executes_with_signal_instance():
+    from contextlib import nullcontext
     from types import SimpleNamespace
     from unittest.mock import patch
 
@@ -161,6 +163,12 @@ def test_service_swarm_cleanup_executes_with_signal_instance():
         patch.object(signals, "Image"),
         patch.object(signals, "_cleanup_service_cache_images"),
         patch.object(signals, "_cleanup_service_volumes"),
+        patch.object(signals, "_cleanup_service_releases"),
+        patch(
+            "deployments.core.state.locks.acquire_service_deployment_transaction_lock",
+            return_value=nullcontext(),
+        ),
+        patch("services.lifecycle.bump_lifecycle", return_value=1),
     ):
         container_class.return_value.exists.return_value = False
 
@@ -181,13 +189,18 @@ def test_service_cleanup_recovers_owned_stale_volume_attachments():
 
 
 def test_ready_app_delete_preflights_all_child_resources_before_deleting_rows():
-    source = (ROOT / "app_catalog" / "apis.py").read_text(encoding="utf-8")
-    delete_section = source.split("class ApplicationInstanceDetailAPIView", 1)[1].split(
-        "class ApplicationInstanceCancelAPIView", 1
+    source = (ROOT / "app_catalog" / "executor.py").read_text(encoding="utf-8")
+    delete_section = source.split("def cleanup_terminal_application", 1)[1].split(
+        "def _dependency_map", 1
     )[0]
-    assert "cleanup_service_resources" in delete_section
-    assert "for row in service_rows:" in delete_section
-    assert "application_cleanup_pending" in delete_section
+    assert "deletion_pending" in delete_section
+    assert "self._fence_children_for_deletion()" in delete_section
+    assert "for service in service_rows:" in delete_section
+    assert "cleanup_service_resources(service)" in delete_section
+    assert "delete_service_row_after_cleanup(service)" in delete_section
+    assert delete_section.index("self._fence_children_for_deletion()") < delete_section.index(
+        "cleanup_service_resources(service)"
+    )
 
 
 
@@ -262,10 +275,15 @@ def test_legacy_catalog_volume_falls_back_to_unlabeled_canonical_identity_when_l
     canonical_raw = SimpleNamespace(attrs={"Labels": {}})
 
     def docker_volume(name):
-        assert name == canonical_name
+        assert name in {legacy_name, canonical_name}
+        def get_volume(candidate):
+            if candidate == legacy_name:
+                raise signals.docker.errors.NotFound("legacy volume is absent")
+            assert candidate == canonical_name
+            return canonical_raw
         return SimpleNamespace(
             client=SimpleNamespace(
-                volumes=SimpleNamespace(get=MagicMock(return_value=canonical_raw))
+                volumes=SimpleNamespace(get=get_volume)
             )
         )
 

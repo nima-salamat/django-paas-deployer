@@ -21,6 +21,8 @@ class ReconciliationExecutionContext:
     owns_execution: Callable[[], bool]
     cancellation_requested: Callable[[], bool] = lambda: False
     current_generation: Callable[[], int | str] | None = None
+    current_active_revision: Callable[[], str | None] | None = None
+    journal_runtime_resources: Callable[..., None] | None = None
 
     def assert_current(self) -> None:
         if not self.owns_execution():
@@ -33,6 +35,28 @@ class ReconciliationExecutionContext:
                 raise StaleDeploymentWorkerError(
                     "Reconciliation was generated for a stale lifecycle generation."
                 )
+        if self.current_active_revision is not None:
+            observed_revision = self.current_active_revision()
+            if str(observed_revision or "") != str(self.active_revision_id or ""):
+                raise StaleDeploymentWorkerError(
+                    "Reconciliation was generated for a stale active revision."
+                )
+
+    def runtime_cancel_check(self) -> bool:
+        """Fence each runtime checkpoint with current service ownership."""
+        self.assert_current()
+        return bool(self.cancellation_requested())
+
+    def journal_resources(self, state: str, *, plan=None, handle=None, error: str = "") -> None:
+        if self.journal_runtime_resources is None:
+            return
+        self.assert_current()
+        self.journal_runtime_resources(
+            state=state,
+            plan=plan,
+            handle=handle,
+            error=error,
+        )
 
 
 class ReconciliationExecutor:
@@ -90,7 +114,9 @@ class ReconciliationExecutor:
                 raise StaleDeploymentWorkerError(
                     "Runtime resource identity does not belong to the desired service."
                 )
-            result = runtime.stop(handle, operation_key=operation_key, cancel_check=context.cancellation_requested)
+            context.assert_current()
+            context.journal_resources("cleanup_pending", handle=handle)
+            result = runtime.stop(handle, operation_key=operation_key, cancel_check=context.runtime_cancel_check)
         elif action in {
             ReconciliationAction.CREATE,
             ReconciliationAction.UPDATE,
@@ -106,10 +132,12 @@ class ReconciliationExecutor:
                     "Reconciliation plan identity does not belong to the desired service."
                 )
             try:
+                context.journal_resources("planned", plan=plan)
+                context.assert_current()
                 result = runtime.apply(
                     plan,
                     operation_key=operation_key,
-                    cancel_check=context.cancellation_requested,
+                    cancel_check=context.runtime_cancel_check,
                 )
             except Exception as exc:
                 # A multi-process runtime may have applied earlier process
@@ -123,7 +151,7 @@ class ReconciliationExecutor:
                         recovery = recover(
                             dict(getattr(exc, "details", {}) or {}),
                             operation_key=f"{operation_key}:recovery",
-                            cancel_check=lambda: False,
+                            cancel_check=context.runtime_cancel_check,
                         )
                         if isinstance(exc, RuntimeOperationError):
                             exc.details = {
@@ -140,7 +168,13 @@ class ReconciliationExecutor:
                                 ),
                                 "reconciliation_required": True,
                             }
+                context.journal_resources(
+                    "cleanup_pending",
+                    plan=plan,
+                    error=str(getattr(exc, "technical_message", None) or exc),
+                )
                 raise
+            context.journal_resources("created", plan=plan, handle=result.handle)
         else:
             raise ValueError(f"Unsupported reconciliation action: {action.value}")
 
@@ -153,17 +187,19 @@ class ReconciliationExecutor:
             ready = runtime.wait_ready(
                 result.handle,
                 timeout=float(desired.metadata.get("readiness_timeout", 60.0) or 60.0),
-                cancel_check=context.cancellation_requested,
+                cancel_check=context.runtime_cancel_check,
             )
             context.assert_current()
+            context.journal_resources("ready", plan=plan, handle=result.handle)
             finalize = getattr(runtime, "finalize_success", None)
             if callable(finalize):
                 finalize(
                     result.handle,
                     operation_key=f"{operation_key}:finalize",
-                    cancel_check=context.cancellation_requested,
+                    cancel_check=context.runtime_cancel_check,
                 )
             context.assert_current()
+            context.journal_resources("active", plan=plan, handle=result.handle)
             return ready
 
         context.assert_current()

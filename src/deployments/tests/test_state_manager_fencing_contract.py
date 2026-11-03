@@ -132,7 +132,7 @@ def test_retry_pending_keeps_same_owner_and_commits_cancellation_atomically():
 
     assert "execution_task_id" in method
     assert "service.task_id" in method
-    assert "if deploy.cancel_requested" in method
+    assert "cancelled = bool(deploy.cancel_requested)" in method
     assert "DeploymentEventOutbox.objects.create" in method
     assert '"retry_pending"' in method
     assert "updates = {" in method

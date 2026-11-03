@@ -278,6 +278,21 @@ class Deploy(BaseModel):
         _("Worker Heartbeat"), blank=True, null=True, db_index=True,
         help_text=_("Last heartbeat from the worker that owns this deployment."),
     )
+    expected_lifecycle_generation = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text=_("Lifecycle generation captured when this deployment intent was queued."),
+    )
+    expected_active_revision_id = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text=_("Active revision observed when this deployment intent was queued."),
+    )
+    worker_recovery_attempts = models.PositiveSmallIntegerField(
+        default=0,
+        help_text=_("Bounded number of same-task recoveries after a lost Celery worker process."),
+    )
     previous_deploy = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.SET_NULL,
         related_name="replacement_deployments",
@@ -319,6 +334,25 @@ class Deploy(BaseModel):
                 })
     
     def save(self, *args, **kwargs):
+        # Persist the immutable lifecycle intent before the Celery task is
+        # published. Reading these values in the worker would let an old task
+        # adopt a newer Start/Stop intent merely because it started later.
+        if self._state.adding and self.service_id:
+            service = self._state.fields_cache.get("service")
+            if service is None:
+                service = Service.objects.only(
+                    "lifecycle_generation", "active_revision_id"
+                ).filter(pk=self.service_id).first()
+            if service is not None:
+                if self.expected_lifecycle_generation is None:
+                    self.expected_lifecycle_generation = int(
+                        getattr(service, "lifecycle_generation", 0) or 0
+                    )
+                if not self.expected_active_revision_id:
+                    self.expected_active_revision_id = str(
+                        getattr(service, "active_revision_id", "") or ""
+                    )
+
         skip = bool(kwargs.pop("skip_zip_size_limit", False) or getattr(self, "skip_zip_size_limit", False))
         if skip:
             self.skip_zip_size_limit = True
@@ -428,7 +462,13 @@ class DeploymentEventOutbox(BaseModel):
     """Authoritative durable deployment event awaiting projection."""
 
     event_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
-    deployment = models.ForeignKey("deploy.Deploy", on_delete=models.CASCADE, related_name="event_outbox")
+    deployment = models.ForeignKey(
+        "deploy.Deploy",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="event_outbox",
+    )
     service_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
     event_type = models.CharField(max_length=128)
     stage = models.CharField(max_length=64)

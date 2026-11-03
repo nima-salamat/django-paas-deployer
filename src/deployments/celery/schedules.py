@@ -8,6 +8,7 @@ from celery import shared_task
 from celery.result import AsyncResult
 from django.db import transaction
 from django.utils import timezone
+from docker.errors import NotFound as DockerNotFound
 from core.utils import make_uuid4
 
 from core.global_settings.config import MAX_DEPLOY_TIME_MINUTE, SERVICE_STATUS_CHOICES
@@ -15,7 +16,7 @@ from deployments.core.manager.container_manager import Container
 from deployments.core.swarm import SwarmRuntime, swarm_enabled
 from deployments.core.state.manager import StateManager
 from deployments.core.state.locks import acquire_service_deployment_lock
-from deployments.common.exceptions import DeploymentLockError
+from deployments.common.exceptions import DeploymentLockError, StaleDeploymentWorkerError
 from deploy.models import (
     Deploy,
     DeployLog,
@@ -912,6 +913,167 @@ def _swarm_process_group_health(
     return ready, terminal_failure, observations
 
 
+def _recover_stale_swarm_worker_without_ready_runtime(deploy, runtime, *, reason: str) -> None:
+    """Fence a lost worker and recover only journaled, label-owned Swarm resources."""
+    try:
+        with acquire_service_deployment_lock(deploy.service_id):
+            with transaction.atomic():
+                locked = (
+                    Deploy.objects.select_for_update()
+                    .select_related("service")
+                    .filter(pk=deploy.pk)
+                    .first()
+                )
+                if locked is None or locked.status != DeploymentStatusChoices.RUNNING:
+                    return
+                service = Service.objects.select_for_update().filter(pk=locked.service_id).first()
+                if service is None:
+                    return
+
+                recovery_metadata = dict(locked.recovery_metadata or {})
+                expected_generation = (
+                    recovery_metadata.get("expected_lifecycle_generation")
+                    if str(locked.operation or "").lower() == "rollback"
+                    else locked.expected_lifecycle_generation
+                )
+                generation_matches = (
+                    expected_generation is None
+                    or int(service.lifecycle_generation or 0) == int(expected_generation)
+                )
+                worker_task_id = str(locked.execution_task_id or "")
+                cleanup_failures = []
+                from deploy.models import DeploymentResource
+                resources = list(
+                    DeploymentResource.objects.select_for_update().filter(
+                        deployment_id=locked.pk,
+                        kind="runtime_service",
+                        owned=True,
+                    ).exclude(state="retired")
+                )
+                for resource in resources:
+                    name = str(resource.name or "").strip()
+                    if not name:
+                        continue
+                    try:
+                        try:
+                            docker_service = runtime.client.services.get(name)
+                        except DockerNotFound:
+                            resource.state = "retired"
+                            resource.retired_at = timezone.now()
+                            resource.last_error = ""
+                            resource.save(update_fields=["state", "retired_at", "last_error", "updated_at"])
+                            continue
+                        labels = ((docker_service.attrs or {}).get("Spec") or {}).get("Labels") or {}
+                        if (
+                            str(labels.get("passdeployer.deployment") or "")
+                            != str(locked.pk)
+                            or str(labels.get("passdeployer.service") or "")
+                            != str(service.pk)
+                        ):
+                            error = "Runtime ownership labels do not match the lost deployment."
+                            resource.state = "cleanup_pending"
+                            resource.last_error = error
+                            resource.save(update_fields=["state", "last_error", "updated_at"])
+                            cleanup_failures.append({"resource": name, "error": error})
+                            continue
+                        if service.active_revision_id:
+                            # The resource name may be shared with the active
+                            # release. Swarm's update history is the safe rollback.
+                            runtime.rollback_service(name)
+                        else:
+                            runtime.remove(name)
+                        resource.state = "retired"
+                        resource.retired_at = timezone.now()
+                        resource.last_error = ""
+                        resource.save(update_fields=["state", "retired_at", "last_error", "updated_at"])
+                    except Exception as exc:
+                        resource.state = "cleanup_pending"
+                        resource.last_error = str(exc)[:2000]
+                        resource.save(update_fields=["state", "last_error", "updated_at"])
+                        cleanup_failures.append({"resource": name, "error": str(exc)[:1000]})
+
+                cancelled = bool(locked.cancel_requested or not generation_matches)
+                target = (
+                    DeploymentStatusChoices.CANCELLED
+                    if cancelled
+                    else DeploymentStatusChoices.FAILED
+                )
+                event_type = "deployment.cancelled.warning" if cancelled else "deployment.worker_lost.error"
+                message = (
+                    "Deployment worker was lost and owned runtime recovery was completed."
+                    if not cleanup_failures
+                    else "Deployment worker was lost and runtime cleanup requires reconciliation."
+                )
+                committed = StateManager.transition_deploy_system_terminal(
+                    locked.pk,
+                    target,
+                    update_fields={
+                        "stage": "worker_lost_recovery",
+                        "progress": 100,
+                        "status_message": message,
+                        "error_message": reason,
+                        "cleanup_status": "critical" if cleanup_failures else "clean",
+                        "cleanup_failures": cleanup_failures,
+                        "reconciliation_required": bool(cleanup_failures or service.active_revision_id),
+                    },
+                    expected_execution_task_id=worker_task_id,
+                    project_service=False,
+                    event_payload={
+                        "event_id": str(uuid.uuid4()),
+                        "trace_id": str(locked.pk),
+                        "deployment_id": str(locked.pk),
+                        "service_id": str(locked.service_id),
+                        "revision_id": str(locked.revision_id or ""),
+                        "task_id": "stale-worker-recovery",
+                        "event_type": event_type,
+                        "stage": "worker_lost_recovery",
+                        "level": "warning" if cancelled else "error",
+                        "message": message,
+                        "progress": 100,
+                        "details": {
+                            "reason": reason,
+                            "cleanup_failures": cleanup_failures,
+                            "expected_lifecycle_generation": expected_generation,
+                            "actual_lifecycle_generation": int(service.lifecycle_generation or 0),
+                        },
+                    },
+                )
+                if not committed or not generation_matches:
+                    return
+
+                desired_state = str(service.desired_state or "stopped").lower()
+                if cleanup_failures:
+                    target_service_status = SERVICE_STATUS_CHOICES.FAILED
+                elif service.active_revision_id and desired_state == "running":
+                    try:
+                        restored, _failed, _observations = _swarm_process_group_health(
+                            runtime, service, deploy=None
+                        )
+                    except Exception:
+                        restored = False
+                    target_service_status = (
+                        SERVICE_STATUS_CHOICES.RUNNING
+                        if restored
+                        else SERVICE_STATUS_CHOICES.FAILED
+                    )
+                elif desired_state == "stopped":
+                    target_service_status = SERVICE_STATUS_CHOICES.STOPPED
+                else:
+                    target_service_status = SERVICE_STATUS_CHOICES.FAILED
+                if service.status != target_service_status:
+                    StateManager.transition_service(
+                        service.pk,
+                        target_service_status,
+                        update_fields={"task_id": None, "deploy_started": None},
+                        allow_runtime_reconciliation=(
+                            target_service_status == SERVICE_STATUS_CHOICES.RUNNING
+                        ),
+                        expected_lifecycle_generation=service.lifecycle_generation,
+                    )
+    except DeploymentLockError:
+        logger.debug("Skipping stale recovery; service lock is still held service=%s", deploy.service_id)
+
+
 def _recover_stale_running_deploys_swarm(policies) -> None:
     """Recover stale workers from the Swarm service/task state."""
     stale_after = int(policies.get("stale_worker_seconds", 120))
@@ -931,11 +1093,22 @@ def _recover_stale_running_deploys_swarm(policies) -> None:
             service_name = deploy.service.get_docker_service_name()
             state = runtime.inspect_service(service_name)
             if state is None:
+                _recover_stale_swarm_worker_without_ready_runtime(
+                    deploy,
+                    runtime,
+                    reason="The primary Swarm service disappeared before the worker completed.",
+                )
                 continue
-            group_ready, _group_failed, _group_observations = _swarm_process_group_health(
+            group_ready, group_failed, _group_observations = _swarm_process_group_health(
                 runtime, deploy.service, deploy=deploy
             )
             if not group_ready:
+                if group_failed:
+                    _recover_stale_swarm_worker_without_ready_runtime(
+                        deploy,
+                        runtime,
+                        reason="The Swarm process group reached a terminal failed state after worker loss.",
+                    )
                 continue
             docker_service = runtime.client.services.get(service_name)
             labels = ((docker_service.attrs or {}).get("Spec") or {}).get("Labels") or {}
@@ -1755,6 +1928,68 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
                 return
 
             decision = ReconciliationPlanner().decide(desired, observed, selection)
+            generation = getattr(service, "lifecycle_generation", 0)
+
+            def _journal_reconciled_resources(*, state, plan=None, handle=None, error=""):
+                if deploy is None:
+                    return
+                from deploy.models import DeploymentResource
+
+                identity = getattr(plan, "identity", None) if plan is not None else None
+                name_factory = getattr(identity, "resource_name", None)
+                base_name = str(name_factory() if callable(name_factory) else "").strip()
+                runtime_options = dict(getattr(plan, "runtime_options", {}) or {})
+                processes = list(runtime_options.get("processes") or ())
+                handle_metadata = dict(getattr(handle, "metadata", {}) or {})
+                service_ids = dict(handle_metadata.get("service_ids") or {})
+                if not base_name and handle is not None:
+                    base_name = str(getattr(handle, "resource_name", "") or "").strip()
+                if not processes and base_name:
+                    processes = [{"name": "web", "enabled": True}]
+                for process in processes:
+                    if not isinstance(process, dict) or process.get("enabled", True) is False:
+                        continue
+                    process_name = str(process.get("name") or "web").strip().lower()
+                    name = base_name if process_name == "web" else f"{base_name}-{process_name}"
+                    if not name:
+                        continue
+                    runtime_id = str(
+                        service_ids.get(name)
+                        or (getattr(handle, "runtime_id", "") if process_name == "web" else "")
+                        or ""
+                    )
+                    with transaction.atomic():
+                        current_service = Service.objects.select_for_update().filter(pk=service.pk).first()
+                        if (
+                            current_service is None
+                            or int(current_service.lifecycle_generation or 0) != int(generation or 0)
+                            or str(current_service.active_revision_id or "") != str(desired.revision_id or "")
+                        ):
+                            raise StaleDeploymentWorkerError(
+                                "Cannot journal reconciliation resources after service ownership changed."
+                            )
+                        DeploymentResource.objects.update_or_create(
+                            deployment_id=deploy.pk,
+                            kind="runtime_service",
+                            name=name[:255],
+                            defaults={
+                                "runtime_id": runtime_id[:255],
+                                "state": str(state)[:32],
+                                "owned": True,
+                                "metadata": {
+                                    "service_id": str(service.pk),
+                                    "deployment_id": str(deploy.pk),
+                                    "revision_id": str(desired.revision_id or ""),
+                                    "operation_key": (
+                                        f"reconcile:{service.pk}:generation:{generation}:"
+                                        f"revision:{desired.revision_id or 'none'}"
+                                    ),
+                                    "source": "desired_state_reconciliation",
+                                },
+                                "last_error": str(error or "")[:2000],
+                            },
+                        )
+
             logger.info(
                 "Swarm reconciliation decision service=%s action=%s reason=%s",
                 service.pk,
@@ -1777,13 +2012,19 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
                     if not locked:
                         return
                     if (
+                        int(getattr(locked, "lifecycle_generation", 0) or 0)
+                        != int(generation or 0)
+                        or str(locked.active_revision_id or "")
+                        != str(desired.revision_id or "")
+                    ):
+                        return
+                    if (
                         decision.action is ReconciliationAction.CONVERGED
                         and locked.status == SERVICE_STATUS_CHOICES.SUCCEEDED
                     ):
                         mark_service_running(locked, deploy=get_authoritative_deploy(locked))
                 return
 
-            generation = getattr(service, "lifecycle_generation", 0)
             context = ReconciliationExecutionContext(
                 service_id=str(service.pk),
                 lifecycle_generation=generation,
@@ -1801,6 +2042,10 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
                 current_generation=lambda sid=str(service.pk): Service.objects.filter(
                     pk=sid
                 ).values_list("lifecycle_generation", flat=True).first(),
+                current_active_revision=lambda sid=str(service.pk): Service.objects.filter(
+                    pk=sid
+                ).values_list("active_revision_id", flat=True).first(),
+                journal_runtime_resources=_journal_reconciled_resources,
                 cancellation_requested=lambda sid=str(service.pk): (
                     str(Service.objects.filter(pk=sid).values_list("desired_state", flat=True).first() or "").lower()
                     != "running"
@@ -1839,6 +2084,17 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
             with transaction.atomic():
                 locked = Service.objects.select_for_update().filter(pk=service.pk).first()
                 if not locked:
+                    return
+                if (
+                    int(getattr(locked, "lifecycle_generation", 0) or 0)
+                    != int(generation or 0)
+                    or str(locked.active_revision_id or "")
+                    != str(desired.revision_id or "")
+                ):
+                    logger.info(
+                        "Skipping stale reconciliation projection service=%s generation=%s revision=%s",
+                        service.pk, generation, desired.revision_id,
+                    )
                     return
                 if decision.action is ReconciliationAction.STOP:
                     mark_service_stopped(locked, deploy=get_authoritative_deploy(locked))

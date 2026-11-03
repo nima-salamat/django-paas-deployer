@@ -372,6 +372,20 @@ class SwarmRuntimeAdapter:
             if isinstance(execution_contract_value, Mapping)
             else None
         )
+        raw_execution_contracts = dict(runtime_options.get("execution_contracts") or {})
+        execution_contracts = {
+            str(name): (
+                RuntimeExecutionContract.from_dict(value)
+                if isinstance(value, Mapping)
+                else value
+            )
+            for name, value in raw_execution_contracts.items()
+        }
+        if execution_contract is not None:
+            execution_contracts.setdefault(
+                str(execution_contract.process_name or "web"),
+                execution_contract,
+            )
         # Keep the state collection defined for both the production
         # process-graph runtime and small/single-service runtime doubles.
         # The fallback path used to leave `states` undefined, causing the
@@ -428,7 +442,9 @@ class SwarmRuntimeAdapter:
                 "service_names": process_names,
                 "execution_contracts_by_service": execution_contracts_by_service,
                 "service_ids": {
-                    str(name): str(getattr(result, "service_id", "") or "")
+                    str(getattr(result, "name", name)): str(
+                        getattr(result, "service_id", "") or ""
+                    )
                     for name, result in states.items()
                 },
                 "expected_image": image_ref,

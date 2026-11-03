@@ -24,5 +24,10 @@ app.config_from_object("django.conf:settings", namespace="CELERY", force=True)
 # Prevent CELERY_IMPORTS / include from loading worker implementation modules.
 # send_task() publishes the string task names without requiring local registry
 # entries. Actual execution remains in normal worker processes.
-app.conf.imports = ()
-app.conf.include = ()
+app.conf.update(
+    imports=(),
+    include=(),
+    # Keep the namespaced Django setting from taking precedence through the
+    # Celery settings alias map after the lowercase override is applied.
+    CELERY_IMPORTS=(),
+)

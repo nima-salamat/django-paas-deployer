@@ -288,12 +288,15 @@ class AdminServiceViewSet(ModelViewSet):
                 },
                 status=status.HTTP_409_CONFLICT,
             )
-        try:
-            _purge_service_runtime(service)
-        except Exception as exc:
-            logger.warning("admin purge before service delete failed: %s", exc)
         owner_id = getattr(service, "user_id", None)
-        service.delete()
+        from deployments.common.exceptions import DeploymentLockError
+        try:
+            service.delete()
+        except DeploymentLockError as exc:
+            return Response(
+                {"result": "error", "detail": str(exc.user_message), "code": exc.code},
+                status=status.HTTP_409_CONFLICT,
+            )
         try:
             from core.app_cache import invalidate_user_services, invalidate_all_services
             if owner_id:
@@ -514,11 +517,22 @@ def admin_start_service_apiview(request):
                         exc,
                     )
 
+            from services.lifecycle import bump_lifecycle
+            from deployments.core.state.manager import StateManager
+
+            generation = bump_lifecycle(service_item.pk, desired_state="running")
+            service_item.refresh_from_db(fields=["active_revision_id"])
             task_id = make_uuid4()
-            service_item.status = SERVICE_STATUS_CHOICES.QUEUED
-            service_item.deploy_started = timezone.now()
-            service_item.task_id = task_id
-            service_item.save()
+            StateManager.transition_service(
+                service_item.pk,
+                SERVICE_STATUS_CHOICES.QUEUED,
+                update_fields={
+                    "deploy_started": timezone.now(),
+                    "task_id": task_id,
+                    "desired_state": "running",
+                    "lifecycle_generation": generation,
+                },
+            )
 
             Deploy.objects.filter(pk=deploy_item.pk).update(
                 status="pending",
@@ -529,6 +543,9 @@ def admin_start_service_apiview(request):
                 else "Deployment queued.",
                 error_message="",
                 cancel_requested=False,
+                expected_lifecycle_generation=generation,
+                expected_active_revision_id=str(service_item.active_revision_id or ""),
+                worker_recovery_attempts=0,
             )
 
             if is_db:
@@ -596,17 +613,26 @@ def admin_stop_service_apiview(request):
                 )
 
             custom_task_id = make_uuid4()
+            from services.lifecycle import bump_lifecycle
+            from deployments.core.state.manager import StateManager
 
-            service_item.status = SERVICE_STATUS_CHOICES.STOPPING
-            service_item.task_id = custom_task_id
-            service_item.deploy_started = timezone.now()
-            service_item.save(
-                update_fields=["status", "task_id", "deploy_started"]
+            generation = bump_lifecycle(service_item.pk, desired_state="stopped")
+            StateManager.transition_service(
+                service_item.pk,
+                SERVICE_STATUS_CHOICES.STOPPING,
+                update_fields={
+                    "task_id": custom_task_id,
+                    "deploy_started": timezone.now(),
+                    "desired_state": "stopped",
+                    "lifecycle_generation": generation,
+                },
             )
 
             transaction.on_commit(
                 lambda: stop_service.apply_async(
-                    args=[str(service_id)], task_id=custom_task_id
+                    args=[str(service_id)],
+                    kwargs={"expected_lifecycle_generation": generation},
+                    task_id=custom_task_id,
                 )
             )
 

@@ -56,6 +56,21 @@ The build step still uses the existing Dockerfile generator and image manager,
 but the resulting artifact is promoted into a durable BuildArtifact before
 runtime application.
 
+## Activation, cancellation and resource ownership
+
+Every queued Deploy stores the Service lifecycle generation and active
+revision it observed. Native Swarm and database Deploy activation may replace
+the active revision only when both captured values still match under the
+Service/Deploy row locks. A cancellation observed at the activation boundary
+is committed as terminal cancellation and runs ownership-fenced cleanup.
+
+The resource journal advances through `planned`, `created`, `ready`, and
+`active`. Failure and cancellation record `retired` or `cleanup_pending` before
+the Deploy terminal transition. A post-activation cleanup failure leaves the
+Deploy succeeded, records cleanup/reconciliation state, and does not roll back
+the authoritative revision. A rollback is reported as successful only after
+the previous runtime handle is identified and readiness is confirmed.
+
 ## Entry: Celery task
 
 **Module:** `deployments/celery/tasks.py::deploy`
@@ -65,6 +80,8 @@ runtime application.
 - Deploy id exists;
 - task is not already cancelled;
 - database platform guard has either routed DB work or determined application path.
+- the Deploy carries the lifecycle generation and active revision observed when
+  that execution intent was queued.
 
 ### Action
 
@@ -126,6 +143,11 @@ The Deploy receives task ownership and heartbeat timestamps.
 ### Why
 
 This is the authoritative handoff from async queue delivery to active deployment execution.
+
+Database deployments acquire the same Service advisory lock before claiming
+the Deploy and Service rows. They keep it for the full database runtime
+operation, so row ownership is never established before the long-lived
+per-Service lock.
 
 ## Revision boundary
 
@@ -285,20 +307,38 @@ Only a successful readiness result is allowed to enter activation.
 
 ### Algorithm
 
-1. lock Service;
-2. resolve current active deployment;
-3. compare with captured `previous_deploy_id`;
-4. reject if another deployment already became active;
-5. call `activate_revision_locked()`;
-6. set desired_state=running.
+1. lock Service and Deploy;
+2. verify execution owner, cancellation state, captured lifecycle generation,
+   captured active revision, and the previous deployment;
+3. return a typed outcome (`activated`, `cancelled`, `conflict`, or `stale`)
+   when the compare-and-set does not activate;
+4. call `activate_revision_locked()` only if the complete intent still matches;
+5. set desired_state=running in the same transaction.
 
 ### Why compare previous_deploy_id
 
-Without the compare-and-lock, deployment A could start first, deployment B could become active later, and A could then overwrite B's authority after a long build.
+Without the compare-and-lock, deployment A could start first, deployment B or a
+stop/cancel operation could change the Service later, and A could overwrite the
+newer intent after a long build. The queued generation and active-revision
+snapshot make that stale completion detectable.
 
 ### Postcondition
 
 Service.active_revision points to the newly activated revision and selected_deploy is updated only as a compatibility projection.
+
+## Resource journal and post-activation finalization
+
+Before applying runtime resources, lifecycle execution records the planned
+resource identities in the recovery journal. Apply, readiness, activation,
+retirement, and failed cleanup update that journal so recovery can identify
+what the deployment owns even if the worker disappears between Docker calls.
+After activation, finalization failures are persisted as reconciliation work;
+they do not silently roll back an already-authoritative revision.
+
+Force cancellation increments the Service lifecycle generation immediately,
+revokes the task without terminating a worker that may still be in an external
+call, and queues ownership-checked cleanup. Cleanup uses journaled identities
+and runtime ownership labels, and preserves the active revision's resources.
 
 ## Cleanup
 
@@ -329,6 +369,12 @@ The worker computes a result and current ownership can be checked.
 Owned terminal transitions are committed through `StateManager.transition_deploy_terminal_if_owned()`.
 
 A stale worker cannot overwrite a newer terminal outcome.
+
+When a failed attempt restores the previously active revision and its readiness
+check succeeds, the Service projection is returned to RUNNING only if a
+transaction still sees the same lifecycle generation, active revision, and
+desired running state. The failed Deploy remains failed, keeping attempt
+outcome separate from the restored Service state.
 
 ## State machine: meaning and allowed flow
 

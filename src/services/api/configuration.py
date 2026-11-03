@@ -1212,6 +1212,9 @@ class ServiceRevisionRollbackAPIView(ServiceConfigBaseAPIView):
                     "progress": 0,
                     "status_message": f"Rollback to revision {revision.revision_number} queued.",
                     "previous_deploy_id": current,
+                    "expected_lifecycle_generation": lifecycle_generation,
+                    "expected_active_revision_id": str(service.active_revision_id or ""),
+                    "worker_recovery_attempts": 0,
                 },
             )
             transaction.on_commit(lambda: deploy_task.delay(str(deploy.pk)))
