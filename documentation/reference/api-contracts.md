@@ -33,6 +33,9 @@ The endpoint should be understood as a chain, not just a URL. Authentication doe
 | custom_emails | `/api/emails/` | [custom email API](../apps/custom_emails/api.md) |
 | docs | `/api/docs/` | [docs API](../apps/docs/api.md) |
 | core | `/api/system/` + protected media | [core API](../apps/core/api.md) |
+| logs | No standalone public router; runtime log reads/exports are exposed through Services and Agent, with a private ingestion route under Services | [logs API and query boundary](../apps/logs/api.md) |
+| cms | No app-owned REST router; Wagtail page/admin surface | [CMS API/admin boundary](../apps/cms/api.md) |
+| deployments | Internal execution subsystem; no separate customer-facing HTTP router. Public mutations are entered through deploy, services, app_catalog and Agent APIs | [deployment execution manual](../apps/deployments/execution/README.md) |
 
 ## Parameter semantics
 
