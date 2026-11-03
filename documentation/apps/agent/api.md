@@ -39,7 +39,7 @@ AgentPage collection endpoints accept page and page_size. Default page size is 2
 
 ## Complete endpoint matrix
 
-Every row below is copied from the centralized endpoint contract. `scopes` are all required. `any_scopes`, when present, adds an OR requirement on top of the required scopes. Therefore the two shell file/tool contracts that list both file scopes in `scopes` still require both scopes; their `any_scopes` entry is currently redundant and documented as such rather than silently changing runtime behavior.
+The route matrix below is generated from the centralized `src/agent/contracts.py` contract list. `scopes` are cumulative requirements; `any_scopes` is an alternative set where at least one listed scope must be granted. These metadata fields do not replace the existing User/ServiceShare object-level permission checks.
 
 | Contracts in the next table are read from `src/agent/contracts.py`. `Required scopes (all)` must all be granted. `Any-of scopes` is an alternative set: at least one listed scope is required when this column is populated. The Purpose column explains the operation; request/response schemas and edge-case semantics remain in the sections below and in the implementation.
 
