@@ -40,7 +40,7 @@ The same PrivateNetworkViewSet and VolumeViewSet are mounted under /api/networks
 | POST | /services/admin/start_service/ | Staff cross-user start. |
 | POST | /services/admin/stop_service/ | Staff cross-user stop. |
 | POST | /services/admin/purge_service_runtime/ | Staff cross-user runtime purge. |
-| POST | /services/service_status/ | Current lifecycle/runtime status. |
+| POST | /services/service_status/ and /api/services/service_status/ | Current lifecycle/runtime status; the legacy direct alias and app-mounted route use the same view and JSON `service_id` body. |
 
 ## Configuration/revision APIs
 
