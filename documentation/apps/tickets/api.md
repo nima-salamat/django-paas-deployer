@@ -31,16 +31,18 @@ All current ticket APIs require an authenticated active user. Object-level acces
 
 ## Department/admin routes
 
-/ admin / departments/ and / admin / staff/ provide department and membership administration through the dedicated admin API modules. Exact routes are:
+Department and membership administration is split by privilege; department managers may manage department metadata, while membership assignment and cross-user membership replacement are superuser-only.
 
-- /admin/departments/
-- /admin/departments/<id>/
-- /admin/departments/<id>/members/
-- /admin/departments/<id>/staff/
-- /admin/staff/
-- /admin/users/<user_id>/memberships/
+| Method | Route | Behavior |
+|---|---|---|
+| GET, POST | /admin/departments/ | Lists departments visible to staff (with counts) or creates a department under departments.manage. |
+| GET, PUT, DELETE | /admin/departments/<pk>/ | Reads membership detail, updates metadata, or soft-deactivates a department. |
+| POST, DELETE | /admin/departments/<pk>/members/ | Adds/updates or removes a staff membership; superuser only. |
+| GET | /admin/departments/<pk>/staff/ | Lists active staff in a department for assignment controls. |
+| GET | /admin/staff/ | Lists staff accounts, memberships and assigned-open-ticket counts; superuser only. |
+| GET, PUT | /admin/users/<user_id>/memberships/ | Reads or replaces the selected user's department memberships; superuser only. |
 
-These routes use the ticket admin permission classes and should not be confused with customer ownership.
+These routes use the ticket admin permission classes and must not be confused with customer ownership.
 
 ## Authorization chain
 
