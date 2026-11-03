@@ -148,12 +148,17 @@ def model_inventory() -> tuple[list[dict], dict[str, list[dict]]]:
             if not any(name_of(base).rsplit(".", 1)[-1] in MODEL_BASES for base in node.bases):
                 continue
             field_names = []
+            relation_fields = {
+                "ForeignKey", "OneToOneField", "ManyToManyField", "ArrayField",
+                "ParentalKey", "GenericRelation", "GenericForeignKey",
+            }
             for item in node.body:
                 value = item.value if isinstance(item, (ast.Assign, ast.AnnAssign)) else None
                 targets = item.targets if isinstance(item, ast.Assign) else [item.target] if isinstance(item, ast.AnnAssign) else []
                 if not isinstance(value, ast.Call):
                     continue
-                if not name_of(value.func).rsplit(".", 1)[-1].endswith("Field"):
+                field_type = name_of(value.func).rsplit(".", 1)[-1]
+                if not field_type.endswith("Field") and field_type not in relation_fields:
                     continue
                 field_names.extend(target.id for target in targets if isinstance(target, ast.Name))
             doc = ast.get_docstring(node) or "Django model."
