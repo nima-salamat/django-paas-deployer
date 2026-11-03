@@ -51,10 +51,10 @@ Root mounts are `/users/` and `/api/users/`. Customer endpoints use SessionJWTAu
 
 | Method | Route | Handler | What it does |
 |---|---|---|---|
-| GET, POST | `/api/users/admin/tables/` | AdminTableListView | Lists allowed model/table descriptors or creates a row through the constrained admin table contract. |
+| GET | `/api/users/admin/tables/` | AdminTableListView | Lists the allow-listed model/table descriptors, counts and display metadata; it does not create rows. |
 | GET | `/api/users/admin/tables/<str:model_key>/` | AdminTableRowsView | Lists rows for an allow-listed model key. |
 | GET | `/api/users/admin/tables/<str:model_key>/fk-search/` | AdminTableFKSearchAPIView | Searches selectable related rows for a foreign-key editor. |
-| GET, PATCH, DELETE | `/api/users/admin/tables/<str:model_key>/<str:pk>/` | AdminTableRowView | Reads, updates or deletes one allow-listed row after model/field permission checks. |
+| GET, DELETE | `/api/users/admin/tables/<str:model_key>/<str:pk>/` | AdminTableRowView | Reads one allow-listed row or deletes it only when its registry entry is deletable; protected rows and the final active superuser are not deletable. This view has no PATCH handler. |
 | GET, POST | `/api/users/admin/users/<int:pk>/profiles/` | AdminProfileListCreateAPIView | Lists a target user's profile images or uploads an image for that user. |
 | POST | `/api/users/admin/users/<int:pk>/profiles/reorder/` | AdminProfileReorderAPIView | Reorders a target user's profile images. |
 | PATCH, DELETE | `/api/users/admin/users/<int:pk>/profiles/<int:profile_id>/` | AdminProfileDetailAPIView | Updates metadata or deletes one target user's profile image. |
