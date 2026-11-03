@@ -318,7 +318,7 @@ def audit() -> dict:
         # is not evidence that the model itself has been explained.
         headings = [
             match.group(1).strip().casefold()
-            for match in re.finditer(r"^#{2,6}\\s+(.+?)\\s*$", doc, re.MULTILINE)
+            for match in re.finditer(r"^#{2,6}\s+(.+?)\s*$", doc, re.MULTILINE)
         ]
         missing = [
             item["title"] for item in items
