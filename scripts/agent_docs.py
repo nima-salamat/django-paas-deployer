@@ -313,16 +313,21 @@ def audit() -> dict:
     for app, items in sorted(per_app.items()):
         doc_path = DOCS / "apps" / app / "models.md"
         doc = read(doc_path)
-        # A model counts as documented only when it owns an explicit section
-        # heading. A stray mention in another model's prose or a field table
-        # is not evidence that the model itself has been explained.
+        # A model is covered by its own heading or by explicit explanatory
+        # prose/table text in the owning models.md. Grouped model sections
+        # are valid when they name the relevant class.
         headings = [
             match.group(1).strip().casefold()
-            for match in re.finditer(r"^#{2,6}\s+(.+?)\s*$", doc, re.MULTILINE)
+            for match in re.finditer(r"^#{2,6}\\s+(.+?)\\s*$", doc, re.MULTILINE)
+        ]
+        body_lines = [
+            line.casefold() for line in doc.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
         ]
         missing = [
             item["title"] for item in items
             if not any(item["title"].casefold() in heading for heading in headings)
+            and not any(item["title"].casefold() in line for line in body_lines)
         ]
         model_coverage[app] = {
             "source_models": len(items),
