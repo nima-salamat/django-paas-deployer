@@ -1,40 +1,61 @@
-# docs — detailed API route reference
+# docs API — detailed endpoint reference
 
-This page is a source-derived route inventory. Path parameters are required by the URL shape. Request fields shown as observed are read by the implementation; endpoint-specific validation remains authoritative in the handler/serializer.
+Root mount: `/api/docs/`. Public document and public asset reads are intentionally accessible without a user session. Administrative document/category/asset mutations require the docs management permission. The canonical behavior guide is [docs API](api.md).
 
-## Request flow
+## Public content endpoints
 
-```mermaid
-flowchart LR
-    C[Client] --> Auth[Authentication]
-    Auth --> Perm[Permission / ownership]
-    Perm --> Validate[Serializer / handler validation]
-    Validate --> DB[Durable model state]
-    DB --> Async[Optional Celery / side effect]
-```
-
-## Endpoint matrix
-
-| Route declaration | Handler | Request fields observed in source | Requiredness / notes |
+| Method | Route | Handler | What it does |
 |---|---|---|---|
-| `tree/` | `PublicCategoryTreeAPIView` | `alt`, `document`, `file`, `ids`, `kind`, `name`, `search` | no path parameter ; handler-module inputs include `alt`, `document`, `file`, `ids`, `kind`, `name`, `search` |
-| `public/<slug:slug>/` | `PublicDocumentDetailAPIView` | `alt`, `document`, `file`, `ids`, `kind`, `name`, `search` | path `slug` required ; handler-module inputs include `alt`, `document`, `file`, `ids`, `kind`, `name`, `search` |
-| `admin/assets/` | `DocumentAssetListCreateAPIView` | `alt`, `document`, `file`, `ids`, `kind`, `name`, `search` | no path parameter ; handler-module inputs include `alt`, `document`, `file`, `ids`, `kind`, `name`, `search` |
-| `admin/assets/<uuid:asset_id>/` | `DocumentAssetAdminPreviewAPIView` | `alt`, `document`, `file`, `ids`, `kind`, `name`, `search` | path `asset_id` required ; handler-module inputs include `alt`, `document`, `file`, `ids`, `kind`, `name`, `search` |
-| `assets/<uuid:asset_id>/` | `DocumentAssetAPIView` | `alt`, `document`, `file`, `ids`, `kind`, `name`, `search` | path `asset_id` required ; handler-module inputs include `alt`, `document`, `file`, `ids`, `kind`, `name`, `search` |
+| GET | `/` | PublicDocumentsAPIView | Lists published documents only. Draft/unpublished records are excluded. |
+| GET | `/tree/` | PublicCategoryTreeAPIView | Builds the public navigation tree from published categories/documents. |
+| GET | `/public/<slug>/` | PublicDocumentDetailAPIView | Reads one published document by slug. |
 
-## Observed request keys
+Public views disable DRF authentication on purpose: an expired or malformed bearer token must not turn an otherwise public documentation read into a 401.
 
-| Key | Typical role | Optionality |
+## Document administration
+
+Router prefix: `/admin/documents/`, handler: `DocumentAdminViewSet`.
+
+| Method | Route | What it does |
 |---|---|---|
-| `alt` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `document` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `file` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `ids` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `kind` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `name` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `search` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
+| GET | `/admin/documents/` | Lists admin-visible document records. |
+| POST | `/admin/documents/` | Creates a document (normally in draft state) after serializer/model validation. |
+| GET | `/admin/documents/<pk>/` | Reads an individual document, including editable content and publication state. |
+| PUT, PATCH | `/admin/documents/<pk>/` | Updates document fields and ordering/activity metadata under docs.manage. |
+| DELETE | `/admin/documents/<pk>/` | Deletes an admin-owned document under docs.manage. |
+| POST | `/admin/documents/reorder/` | Rewrites document order from the submitted ordered ID list. |
+| POST | `/admin/documents/<pk>/publish/` | Publishes a document and records publication time. |
+| POST | `/admin/documents/<pk>/unpublish/` | Moves a published document back to draft/unpublished state. |
+
+## Category administration
+
+Router prefix: `/admin/categories/`, handler: `CategoryAdminViewSet`.
+
+| Method | Route | What it does |
+|---|---|---|
+| GET, POST | `/admin/categories/` | Lists or creates categories. |
+| GET | `/admin/categories/<pk>/` | Reads one category. |
+| PUT, PATCH | `/admin/categories/<pk>/` | Updates category metadata/order under docs.manage. |
+| DELETE | `/admin/categories/<pk>/` | Deletes a category transactionally after moving direct child categories and documents to its parent. |
+| POST | `/admin/categories/reorder/` | Rewrites category ordering. |
+| GET | `/admin/categories/tree/` | Returns the category tree for the administrative editor. |
+
+## Asset endpoints
+
+| Method | Route | Handler | What it does / access rule |
+|---|---|---|---|
+| GET | `/admin/assets/` | DocumentAssetListCreateAPIView | Lists admin-visible assets. |
+| POST | `/admin/assets/` | DocumentAssetListCreateAPIView | Uploads a new asset through multipart/form parsing and file validation. |
+| GET, HEAD | `/assets/<uuid:asset_id>/` | DocumentAssetAPIView | Serves an asset by unguessable UUID capability URL. Cache policy is public for published-document assets and private for draft/unattached assets. |
+| PATCH | `/assets/<uuid:asset_id>/` | DocumentAssetAPIView | Updates asset metadata; mutation is admin-protected even though GET/HEAD is public. |
+| DELETE | `/assets/<uuid:asset_id>/` | DocumentAssetAPIView | Deletes an asset after admin authorization. |
+| GET, HEAD | `/admin/assets/<uuid:asset_id>/` | DocumentAssetAdminPreviewAPIView | Provides authenticated admin preview of an asset. |
+
+Asset download URLs are capabilities: do not publish a private draft asset UUID in public content. Uploads are validated by DocumentAsset.clean and the asset API parser.
 
 ## Source of truth
 
-The URL declaration, handler implementation and serializer validation are authoritative. This reference deliberately does not invent requiredness when the code makes it conditional on login settings, ownership, resource state or another field.
+Routes: `src/docs/urls.py`.
+Handlers and access policy: `src/docs/apis.py`.
+Serializers: `src/docs/serializers.py`.
+Persisted content: `src/docs/models.py`.
