@@ -71,3 +71,17 @@ MessengerEvent.payload is the main JSON contract: producers write event-specific
 Source: src/messenger/models.py.
 
 > **Complete field reference:** [field-reference.md](field-reference.md) lists every field explicitly declared in `src/messenger/models.py`, including type, null/blank behavior, defaults, constraints and purpose.
+
+
+## MatrixIdentity
+
+Server-managed Matrix identity associated one-to-one with the canonical users.User. matrix_user_id is the unique external Matrix identity. encrypted_password is a server-managed encrypted credential used by the encrypted-chat integration; it is never a normal profile or conversation field and must not be returned by standard serializers or logs. created_at and updated_at are audit timestamps.
+
+This model belongs to the optional Matrix E2EE boundary. It does not turn a standard Messenger conversation into an encrypted room. The security mode and room mapping of a Conversation remain immutable after creation.
+
+## MatrixDevice
+
+Device-bound Matrix cryptographic device belonging to a User. (user, device_id) is unique; display_name is descriptive metadata, last_seen_at is refreshed on device activity and revoked_at is the revocation marker. A revoked device remains as identity/audit history and must not be treated as an active encryption device.
+
+MatrixDevice is distinct from auth_users.Device: the former belongs to Matrix cryptographic identity/session state, while the latter records the PassDeployer authentication device. Never merge their identifiers or assume that revoking one automatically revokes the other; use the corresponding device/session workflow.
+
