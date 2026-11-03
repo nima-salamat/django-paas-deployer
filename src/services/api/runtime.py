@@ -534,6 +534,17 @@ def start_service_apiview(request):
             status=status.HTTP_404_NOT_FOUND,
         )
     except Exception as exc:
+        from deployments.common.exceptions import DeploymentLockError
+
+        if isinstance(exc, DeploymentLockError):
+            return Response(
+                {
+                    "result": "error",
+                    "code": exc.code,
+                    "detail": str(exc.user_message),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         # Broker/network/database failures from transaction.on_commit must not
         # become opaque HTTP 500s. The DB changes are rolled back while the
         # client receives an actionable, sanitized response.
@@ -542,6 +553,20 @@ def start_service_apiview(request):
             {
                 "result": "error",
                 "detail": _("Could not queue the service operation."),
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if teardown_error is not None:
+        return Response(
+            {
+                "result": "error",
+                "code": "FORCE_REBUILD_TEARDOWN_FAILED",
+                "detail": _(
+                    "The previous runtime could not be removed safely. "
+                    "The service was fenced and marked for reconciliation; "
+                    "no new deployment was queued."
+                ),
             },
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
