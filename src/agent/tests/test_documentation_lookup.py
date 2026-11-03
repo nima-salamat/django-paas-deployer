@@ -76,3 +76,38 @@ def test_system_lookup_finds_deployment_reconciliation_documentation():
         or "reconciliation" in item["summary"].casefold()
         for item in payload["results"]
     )
+
+
+def test_agent_api_matrix_covers_every_central_contract_with_a_purpose():
+    import re
+
+    contracts = (ROOT / "agent" / "contracts.py").read_text(encoding="utf-8")
+    api_docs = (ROOT / "../documentation/apps/agent/api.md").read_text(encoding="utf-8")
+    entries = re.findall(
+        r'_contract\("([^"]+)",\s*"([^"]+)"',
+        contracts,
+    )
+    matrix = api_docs.split("## Complete endpoint matrix", 1)[1].split(
+        "## Request body schemas", 1
+    )[0]
+
+    assert entries
+    assert "| Method | Endpoint | Purpose |" in matrix
+    for endpoint, method in entries:
+        assert f"| `{method}` | `{endpoint}` |" in matrix
+
+
+def test_documentation_audit_has_no_model_or_api_guide_gaps():
+    result = subprocess.run(
+        [sys.executable, str(CLI), "audit", "--json"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    report = json.loads(result.stdout)
+    assert report["models_missing_from_docs"] == []
+    assert report["apps_without_api_guide"] == []
