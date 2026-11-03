@@ -76,7 +76,7 @@ The root mount table is `src/config/urls.py`. App-level route declarations and r
 - `docs`: `src/docs/urls.py` — `/api/docs/`
 - `messenger`: `src/messenger/urls.py` — `/api/messenger/`
 - `plans`: `src/plans/urls.py` — `/plans/`
-- `services`: `src/services/urls.py`, `src/services/network_api_urls.py`, `src/services/volume_api_urls.py` — `/services/`, `/api/networks/`, `/api/volumes/`
+- `services`: `src/services/urls.py`, `src/services/network_api_urls.py`, `src/services/volume_api_urls.py` — `/services/`, `/api/networks/`, `/api/volumes/`; the legacy status alias `POST /api/services/service_status/` is mounted directly in `src/config/urls.py` and shares the same handler as `POST /services/service_status/`.
 - `tickets`: `src/tickets/urls.py` — `/api/tickets/`
 - `users`: `src/users/urls.py`, `src/users/api_urls.py` — `/users/` and `/api/users/`
 
