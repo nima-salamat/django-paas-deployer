@@ -9,6 +9,7 @@ This directory contains source-aligned navigation and cross-app contract indexes
 - [API rate limiting](rate-limiting.md) — global, authentication and high-cost endpoint abuse-prevention policy.
 - [Global contract coverage test](../../scripts/validate_documentation_contracts.py) — compares that inventory against source in CI.
 - [Model field reference](model-field-reference.md) — field-by-field navigation across first-party models.
+- [Agent documentation and source lookup](agent-documentation-search.md) — command-line search over docs, Django model symbols and API route declarations.
 - [Documentation completeness](documentation-completeness.md) — source-derived documentation coverage policy.
 - [Django/Wagtail admin audit](wagtail-admin-audit.md) — operator/admin exposure decisions.
 - [Project layout](project-layout.md) — repository structure.
