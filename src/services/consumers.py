@@ -1,4 +1,5 @@
 import asyncio
+import posixpath
 import shlex
 import urllib.parse
 import uuid
