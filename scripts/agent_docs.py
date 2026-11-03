@@ -108,6 +108,7 @@ def docs_index() -> list[dict]:
                             "kind": doc_kind(path), "title": current_title,
                             "path": rel(path), "line": current_line,
                             "app": app, "source": False, "summary": text[:2200],
+                            "search_text": text,
                         })
                 current_title = match.group(1).strip()
                 current_line = line_no
@@ -127,6 +128,7 @@ def docs_index() -> list[dict]:
                 "kind": doc_kind(path), "title": current_title,
                 "path": rel(path), "line": current_line,
                 "app": app, "source": False, "summary": text[:2200],
+                "search_text": text,
             })
     return results
 
@@ -269,7 +271,7 @@ def score(entry: dict, query: str) -> float:
         return 0.0
     title = words(entry["title"])
     path = words(entry["path"])
-    summary = words(entry["summary"])
+    summary = words(entry.get("search_text") or entry["summary"])
     score_value = 0.0
     for term in q:
         if term in title:
@@ -301,7 +303,10 @@ def search(query: str, kind: str, app: str | None, limit: int) -> list[dict]:
             continue
         value = score(item, query)
         if value > 0:
-            results.append({**item, "score": round(value, 2)})
+            results.append({
+                **{key: value for key, value in item.items() if key != "search_text"},
+                "score": round(value, 2),
+            })
     results.sort(key=lambda x: (-x["score"], not x["source"], x["path"], x["line"] or 0))
     return results[:max(1, limit)]
 
