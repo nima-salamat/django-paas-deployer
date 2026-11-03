@@ -1,6 +1,6 @@
 # Documentation completeness manifest
 
-Audit baseline: `master`, 2026-11-04. Source code remains authoritative. This manifest lists persisted domain models separately from status enums and other non-model classes. Run `python scripts/agent_docs.py audit` for the current static source-to-doc check.
+Audit baseline: `master`, 2026-11-04. A direct source inventory of all 14 application `models.py` modules found 92 Django model class declarations: 91 persisted/non-abstract model classes and one abstract mixin (`users.PermissionMixin`). The CLI audit identifies abstract models separately rather than counting them as database tables. Source code remains authoritative; run `python scripts/agent_docs.py audit --json` to regenerate the live inventory and source-to-doc coverage check.
 
 ## Installed first-party apps
 
