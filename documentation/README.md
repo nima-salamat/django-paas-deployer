@@ -48,6 +48,11 @@ The per-app deployments README points here rather than duplicating that manual.
 
 - [Source-derived coverage manifest](apps/COVERAGE.md)
 
+## Agent and source lookup
+
+- [Agent documentation and source lookup](reference/agent-documentation-search.md) — run one Python command to search model names, API routes and system documentation.
+- [Documentation completeness manifest](reference/documentation-completeness.md) — current model inventory, API entry points and maintenance checks.
+
 ## Cross-system operations
 
 - [Observability](observability.md)
