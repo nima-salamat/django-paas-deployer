@@ -22,68 +22,11 @@ The REST API owns authentication, object-level conversation/member authorization
 
 The topic route is implemented in `src/messenger/api/topics.py`: standard groups create ordinary child conversations; an encrypted group creates a client-side Matrix encrypted room and registers it through the secure path. The Matrix endpoints are in `src/messenger/api/matrix.py`; they accept only authenticated contacts/authorized participants and do not return the Synapse admin token. Secure rooms use Matrix for encrypted text, while the current release explicitly disables legacy attachment, search, scheduled, forwarding, reaction, read-receipt and call features.
 
-## Complete route matrix
+## Route and behavior source of truth
 
-| Route | Handler | Request fields observed in implementation |
-|---|---|---|
-| `/api/messenger/users/search/` | `as_view` | `allowed_user_ids`, `scope`, `text`, `username` |
-| `/api/messenger/contacts/` | `as_view` | `nickname`, `page`, `page_size`, `q`, `user_id` |
-| `/api/messenger/contacts/<int:user_id>/` | `as_view` | `nickname`, `page`, `page_size`, `q`, `user_id` |
-| `/api/messenger/blocks/` | `as_view` | `nickname`, `page`, `page_size`, `q`, `user_id` |
-| `/api/messenger/blocks/<int:user_id>/unblock/` | `as_view` | `nickname`, `page`, `page_size`, `q`, `user_id` |
-| `/api/messenger/conversations/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
-| `/api/messenger/conversations/<int:pk>/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
-| `/api/messenger/conversations/<int:pk>/topics/` | `ConversationTopicsAPIView` | GET: none; POST: `title`, optional `description` |
-| `/api/messenger/secure/device-session/` | `MatrixDeviceSessionAPIView` | POST: `device_id`, optional `display_name`; GET uses `X-Matrix-Access-Token` and `X-Matrix-Device-ID` headers |
-| `/api/messenger/secure/identities/` | `MatrixIdentityResolveAPIView` | POST: `user_ids` (active contacts/authorized participants only) |
-| `/api/messenger/secure/devices/` | `MatrixDeviceListAPIView` | GET: optional `X-Matrix-Device-ID` header |
-| `/api/messenger/secure/devices/<str:device_id>/revoke/` | `MatrixDeviceRevokeAPIView` | POST: no body required |
-| `/api/messenger/secure/conversations/` | `SecureConversationMapAPIView` | POST: `type`, `member_ids`, `room_id`, optional `space_id`, `title`, `description`; requires `X-Matrix-Access-Token` |
-| `/api/messenger/conversations/<int:pk>/messages/` | `as_view` | `body`, `client_message_id`, `conversation_id`, `emoji`, `force_all`, `limit`, `message_ids`, `q`, `reply_to`, `schedule_at`, `scheduled_for`, `up_to_message_id` |
-| `/api/messenger/conversations/<int:pk>/events/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
-| `/api/messenger/conversations/<int:pk>/messages/search/` | `as_view` | `body`, `client_message_id`, `conversation_id`, `emoji`, `force_all`, `limit`, `message_ids`, `q`, `reply_to`, `schedule_at`, `scheduled_for`, `up_to_message_id` |
-| `/api/messenger/conversations/<int:pk>/scheduled/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
-| `/api/messenger/messages/<int:pk>/cancel-schedule/` | `as_view` | `body`, `client_message_id`, `conversation_id`, `emoji`, `force_all`, `limit`, `message_ids`, `q`, `reply_to`, `schedule_at`, `scheduled_for`, `up_to_message_id` |
-| `/api/messenger/conversations/<int:pk>/read/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
-| `/api/messenger/conversations/<int:pk>/pin/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
-| `/api/messenger/conversations/<int:pk>/invite-links/` | `as_view` | `max_uses` |
-| `/api/messenger/conversations/<int:pk>/invite-links/<int:link_id>/revoke/` | `as_view` | `max_uses` |
-| `/api/messenger/groups/search/` | `as_view` | `action`, `avatar`, `q` |
-| `/api/messenger/groups/<int:pk>/join/` | `as_view` | `action`, `avatar`, `q` |
-| `/api/messenger/join/<str:code>/` | `as_view` | `max_uses` |
-| `/api/messenger/messages/<int:pk>/forward/` | `as_view` | `body`, `client_message_id`, `conversation_id`, `emoji`, `force_all`, `limit`, `message_ids`, `q`, `reply_to`, `schedule_at`, `scheduled_for`, `up_to_message_id` |
-| `/api/messenger/messages/<int:pk>/react/` | `as_view` | `body`, `client_message_id`, `conversation_id`, `emoji`, `force_all`, `limit`, `message_ids`, `q`, `reply_to`, `schedule_at`, `scheduled_for`, `up_to_message_id` |
-| `/api/messenger/messages/<int:pk>/edit/` | `as_view` | `body`, `client_message_id`, `conversation_id`, `emoji`, `force_all`, `limit`, `message_ids`, `q`, `reply_to`, `schedule_at`, `scheduled_for`, `up_to_message_id` |
-| `/api/messenger/messages/<int:pk>/pin/` | `as_view` | `body`, `client_message_id`, `conversation_id`, `emoji`, `force_all`, `limit`, `message_ids`, `q`, `reply_to`, `schedule_at`, `scheduled_for`, `up_to_message_id` |
-| `/api/messenger/messages/<int:pk>/readers/` | `as_view` | `body`, `client_message_id`, `conversation_id`, `emoji`, `force_all`, `limit`, `message_ids`, `q`, `reply_to`, `schedule_at`, `scheduled_for`, `up_to_message_id` |
-| `/api/messenger/messages/<int:pk>/` | `as_view` | `body`, `client_message_id`, `conversation_id`, `emoji`, `force_all`, `limit`, `message_ids`, `q`, `reply_to`, `schedule_at`, `scheduled_for`, `up_to_message_id` |
-| `/api/messenger/conversations/<int:pk>/pinned-messages/` | `as_view` | `body`, `client_message_id`, `conversation_id`, `emoji`, `force_all`, `limit`, `message_ids`, `q`, `reply_to`, `schedule_at`, `scheduled_for`, `up_to_message_id` |
-| `/api/messenger/conversations/<int:pk>/leave/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
-| `/api/messenger/conversations/<int:pk>/participants/` | `as_view` | `member_ids`, `page`, `page_size`, `q`, `role`, `user_id`, `user_ids` |
-| `/api/messenger/conversations/<int:pk>/members/` | `as_view` | `member_ids`, `page`, `page_size`, `q`, `role`, `user_id`, `user_ids` |
-| `/api/messenger/conversations/<int:pk>/members/<int:user_id>/` | `as_view` | `member_ids`, `page`, `page_size`, `q`, `role`, `user_id`, `user_ids` |
-| `/api/messenger/conversations/<int:pk>/members/<int:user_id>/role/` | `as_view` | `member_ids`, `page`, `page_size`, `q`, `role`, `user_id`, `user_ids` |
-| `/api/messenger/conversations/<int:pk>/transfer-ownership/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
-| `/api/messenger/conversations/<int:pk>/delete/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
-| `/api/messenger/attachments/<int:pk>/download/` | `as_view` | `before_id`, `kind`, `limit`, `once`, `token` |
-| `/api/messenger/attachments/<int:pk>/view-once/` | `as_view` | `before_id`, `kind`, `limit`, `once`, `token` |
-| `/api/messenger/me/photos/` | `as_view` | `allowed_user_ids`, `scope`, `text`, `username` |
-| `/api/messenger/me/photo-privacy/` | `as_view` | None observed |
-| `/api/messenger/users/<int:user_id>/profile/` | `as_view` | `allowed_user_ids`, `scope`, `text`, `username` |
-| `/api/messenger/users/by-username/` | `as_view` | None observed |
-| `/api/messenger/conversations/<int:pk>/cleanup/` | `as_view` | `avatar`, `clear_avatar`, `description`, `history_visibility`, `is_closed`, `is_public`, `member_ids`, `members_can_add`, `only_admins_send`, `page`, `page_size`, `requires_approval`, `title`, `type`, `user_id` |
-| `/api/messenger/conversations/<int:pk>/media/` | `as_view` | `before_id`, `kind`, `limit`, `once`, `token` |
-| `/api/messenger/me/bio/` | `as_view` | None observed |
-| `/api/messenger/conversations/<int:pk>/avatar/` | `as_view` | `before_id`, `kind`, `limit`, `once`, `token` |
-| `/api/messenger/conversations/<int:pk>/join-requests/` | `as_view` | `action`, `avatar`, `q` |
-| `/api/messenger/conversations/<int:pk>/join-requests/<int:req_id>/action/` | `as_view` | `action`, `avatar`, `q` |
-| `/api/messenger/me/join-requests/` | `as_view` | `action`, `avatar`, `q` |
-| `/api/messenger/join-requests/<int:req_id>/` | `as_view` | `action`, `avatar`, `q` |
-| `/api/messenger/me/profile-broadcast/` | `as_view` | `allowed_user_ids`, `scope`, `text`, `username` |
-| `/api/messenger/conversations/<int:pk>/call/` | `as_view` | `audio`, `call`, `call_id`, `reason`, `video` |
-| `/api/messenger/conversations/<int:pk>/call/join/` | `as_view` | `audio`, `call`, `call_id`, `reason`, `video` |
-| `/api/messenger/conversations/<int:pk>/call/active/` | `as_view` | `audio`, `call`, `call_id`, `reason`, `video` |
-| `/api/messenger/conversations/<int:pk>/call/end/` | `as_view` | `audio`, `call`, `call_id`, `reason`, `video` |
+The route-by-route matrix is maintained in [messenger API](api.md#exact-http-surface). That page records the method, exact URL, handler purpose, security constraints and side effects for each public endpoint, including contacts, group management, topic conversations, messages, media, view-once attachments, calls and optional Matrix routes.
+
+This page intentionally does not repeat a module-wide set of request keys beside every URL. A key read by one handler is not a parameter for every handler in the same Python file. For operation-specific payloads, follow the exact route's handler in `src/messenger/api/` and its serializer. The request rules below are shared conventions, not a substitute for endpoint-specific validation.
 
 ## Required vs optional input rules
 
