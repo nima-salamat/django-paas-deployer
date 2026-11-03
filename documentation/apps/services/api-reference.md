@@ -1,6 +1,6 @@
 # services — detailed API reference
 
-Root user API mount: `/services/`. User-facing service/network/volume routes are owner-scoped; shared-service access is additionally checked through `ServiceShare` action permissions. Admin routes use explicit staff/rule permissions.
+Root user API mount: `/services/`. User-facing service/network/volume routes are owner-scoped; shared-service access is additionally checked through `ServiceShare` action permissions. Admin routes use explicit staff/rule permissions. The status view is also exposed as the legacy direct alias `POST /api/services/service_status/`; both paths call the same authenticated `service_status_apiview`.
 
 ## Service lifecycle
 
@@ -39,9 +39,9 @@ The Fluent Bit node agent uses `POST /services/internal/logs/ingest/`. This rout
 | POST | `/restart_service/` | `service_id` required | `service_id` | Queues ordered runtime restart without creating a new revision. |
 | POST | `/force_cancel_deploy/` | `deploy_id` or legacy `service_id`; at least one required | one-of | Immediately terminalizes eligible active deployment state under a lock. |
 | POST | `/purge_service_runtime/` | `service_id` required | `service_id` | Purges owned runtime resources through the existing service cleanup boundary. |
-| GET | `/service_status/` | `service_id` required | `service_id` | Returns runtime/service status observation. |
-| GET/POST | `/service/{id}/configuration/` | GET none; PATCH fields below | `service_id` | Reads/updates declarative desired configuration; effective runtime change needs deployment. |
-| GET/POST | `/service/{id}/environment/` | POST: `key`, `value`; `scope` and `is_secret` optional | `key`, `value` for normal set | Creates/updates environment variables; secret values are stored through ServiceSecret. |
+| POST | `/service_status/` | JSON body: `service_id` | `service_id` | Returns observed runtime/service status, CPU/RAM readings and metric availability; the caller needs `can_view_metrics`. The identical handler is also mounted directly at `/api/services/service_status/`. |
+| GET/PATCH | `/service/{id}/configuration/` | GET none; PATCH fields below | `service_id` | Reads/updates declarative desired configuration; effective runtime change needs deployment. |
+| GET/POST/DELETE | `/service/{id}/environment/` | POST: `key`, `value`; `scope` and `is_secret` optional; DELETE identifies the key | `key`, `value` for normal set; `key` for delete | Creates/updates or deletes environment variables; secret values are stored through ServiceSecret. |
 | GET/POST/DELETE | `/service/{id}/secrets/` | `key`, `value`, optional `note` on create/update | key/value for writes | Secret CRUD; plaintext is not returned in read responses. |
 | GET/POST/DELETE | `/service/{id}/endpoints/` | endpoint fields such as `name`, `target_port`, `published_port`, `protocol`, `exposure`, `hostname`, `path`, `tls`, `enabled` | endpoint-specific | Declarative public/internal endpoint configuration. |
 | GET/POST/DELETE | `/service/{id}/networks/` | `network` required on attach | attach: network | Manages explicit Service network attachments. |
