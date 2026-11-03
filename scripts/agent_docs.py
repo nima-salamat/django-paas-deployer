@@ -318,7 +318,7 @@ def audit() -> dict:
         # are valid when they name the relevant class.
         headings = [
             match.group(1).strip().casefold()
-            for match in re.finditer(r"^#{2,6}\\s+(.+?)\\s*$", doc, re.MULTILINE)
+            for match in re.finditer(r"^#{2,6}\s+(.+?)\s*$", doc, re.MULTILINE)
         ]
         body_lines = [
             line.casefold() for line in doc.splitlines()
