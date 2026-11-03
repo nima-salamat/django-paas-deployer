@@ -48,7 +48,7 @@ For a model result, open the owning app's `models.md` for domain meaning and `fi
 
 ## Coverage audit
 
-`python scripts/agent_docs.py audit` compares top-level model classes detected in the source with model names present in each app's `models.md`, and checks that URL-owning apps have an app-level `api.md` or `api-reference.md`.
+`python scripts/agent_docs.py audit` compares top-level model classes detected in the source with explicit section headings in each app's `models.md`. A model mention buried in another model's paragraph or a field table does not count as a model explanation. It also checks that URL-owning apps have an app-level `api.md` or `api-reference.md`.
 
 The JSON audit includes:
 - `models_discovered` and per-app `model_coverage`
