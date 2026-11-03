@@ -214,8 +214,29 @@ def root_prefixes() -> dict[str, list[str]]:
     return result
 
 
+def root_handler_apps() -> dict[str, str]:
+    """Resolve directly imported root URL handlers to their owning app."""
+    result: dict[str, str] = {}
+    path = SRC / "config" / "urls.py"
+    if not path.exists():
+        return result
+    try:
+        tree = ast.parse(read(path), filename=rel(path))
+    except SyntaxError:
+        return result
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom) or not node.module:
+            continue
+        app = node.module.split(".", 1)[0]
+        for imported in node.names:
+            if imported.name != "*":
+                result[imported.asname or imported.name] = app
+    return result
+
+
 def route_inventory() -> list[dict]:
     prefixes = root_prefixes()
+    root_imports = root_handler_apps()
     found = []
     for path in sorted(SRC.rglob("*.py")):
         if not (path.name == "urls.py" or path.name.endswith("_urls.py")):
@@ -245,6 +266,7 @@ def route_inventory() -> list[dict]:
             if isinstance(view, ast.Call) and name_of(view.func).rsplit(".", 1)[-1] == "include":
                 continue
             handler = name_of(view.func.value) if isinstance(view, ast.Call) and name_of(view.func).rsplit(".", 1)[-1] == "as_view" else name_of(view)
+            route_app = app or root_imports.get(handler.rsplit(".", 1)[-1], "")
             methods = []
             if isinstance(view, ast.Call) and name_of(view.func).rsplit(".", 1)[-1] == "as_view" and view.args and isinstance(view.args[0], ast.Dict):
                 methods = [string_arg(k).upper() for k in view.args[0].keys if string_arg(k)]
@@ -257,7 +279,7 @@ def route_inventory() -> list[dict]:
                 seen.add(key)
                 found.append({
                     "kind": "api", "title": f"{method_text} {full}",
-                    "path": rel(path), "line": node.lineno, "app": app,
+                    "path": rel(path), "line": node.lineno, "app": route_app,
                     "source": True,
                     "summary": f"Route: {method_text} {full}\nHandler: {handler or 'unresolved'}\nSee the app API guide for request semantics, access rules and side effects.",
                 })
