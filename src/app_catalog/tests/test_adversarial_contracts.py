@@ -104,3 +104,13 @@ def test_terminal_state_manager_rechecks_cancel_under_lock():
     source = (ROOT / "deployments/core/state/manager.py").read_text(encoding="utf-8")
     assert 'if target != sm.DEPLOY_CANCELLED and deploy.cancel_requested:' in source
     assert 'effective_target = sm.DEPLOY_CANCELLED' in source
+
+
+def test_catalog_gate_routes_database_children_to_the_database_worker():
+    source = (ROOT / "app_catalog" / "tasks.py").read_text("utf-8")
+    gate = source.split('def gate_application_service', 1)[1].split(
+        'def advance_application_service', 1
+    )[0]
+    assert '.select_related("deploy", "service__plan", "instance")' in gate
+    assert "child_task = run_db_deploy if platform in DB_PLATFORMS else deploy_task" in gate
+    assert 'queue="deployments"' in gate
