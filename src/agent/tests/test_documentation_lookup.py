@@ -111,3 +111,7 @@ def test_documentation_audit_has_no_model_or_api_guide_gaps():
     report = json.loads(result.stdout)
     assert report["models_missing_from_docs"] == []
     assert report["apps_without_api_guide"] == []
+    assert report["models_discovered"] == 92
+    assert report["persisted_models_discovered"] == 91
+    assert report["abstract_models_discovered"] == 1
+    assert report["abstract_models"][0]["model"] == "PermissionMixin"
