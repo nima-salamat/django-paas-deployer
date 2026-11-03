@@ -180,3 +180,29 @@ Physical Docker BuildKit storage is global; these models provide logical
 tenant accounting and safe application-image retention.
 
 > **Complete field reference:** [field-reference.md](field-reference.md) lists every field explicitly declared in `src/deploy/models.py`, including type, null/blank behavior, defaults, constraints and purpose.
+
+
+## BuildArtifact
+
+Immutable identity for one built application image. It separates the reproducible build result from build-cache retention and from an individual Deploy attempt. A digest identifies the artifact; the image reference is the runtime-consumable image name. The source digest, build-definition digest, base-image digests, build-context identity, builder backend and architecture capture the inputs needed to explain how the image was produced. Provenance is structured build metadata, and created_by is optional historical attribution.
+
+The model rejects updates after its first insert. Do not use BuildArtifact as a cache-entry row: cache metadata and quotas are separate models. A single artifact may be referenced by more than one release; the artifact is protected while a Release points to it.
+
+## Release
+
+Immutable promotable runtime definition for one ServiceRevision. Release binds the owning Service and immutable revision to an optional BuildArtifact, then stores a fingerprint of the service/revision/artifact/runtime/rollout/health/release-command identity. The fingerprint is deterministic and unique, so repeating the same materialization does not create a logically different release.
+
+The execution specification is stored in runtime_spec, rollout_policy, health_policy and release_command. previous_release records promotion lineage. status, promoted_at and retired_at describe lifecycle projection; the executable identity and provenance fields are immutable after creation. Service deletion may remove the release, but a revision/artifact is protected while a release references it. Release is the deployable immutable aggregate; Deploy remains the execution-attempt record.
+
+## DeploymentResource
+
+Durable ownership journal for runtime resources created or managed by one Deploy attempt. The unique key is (deployment, kind, name); runtime_id records the concrete Docker/Swarm identity when it becomes available. state tracks planned/created/started/ready/active/retired/failed/cleanup-pending progression. owned distinguishes resources safe for this deployment to clean up from external references. metadata contains bounded resource-specific identity, last_error records the last cleanup/apply failure and retired_at records retirement.
+
+The journal is recovery evidence, not permission to remove an arbitrary runtime object. Cleanup must re-check deployment/service ownership and lifecycle generation before each destructive operation. A journal row must not be treated as proof that a resource still exists: reconciliation verifies the external runtime.
+
+## DeploymentEventOutbox
+
+Transactional outbox for authoritative deployment events waiting to be projected to the event/log delivery layer. event_id is the stable idempotency identity. deployment is nullable with SET_NULL so deployment history can be removed without deleting a pending/audit event; service_id remains a string correlation value. event_type, stage, level, occurred_at and payload define the durable event envelope. dispatched_at indicates successful projection; next_attempt_at, attempts and last_error drive retry/recovery.
+
+The row is written with the owning deployment-state transaction and dispatched asynchronously. Consumers must use event_id for deduplication. A successful enqueue is not the same as successful projection; the dispatcher owns retry and terminal handling.
+
