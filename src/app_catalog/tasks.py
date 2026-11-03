@@ -105,7 +105,7 @@ def gate_application_service(self, instance_id: str, service_key: str):
     with transaction.atomic():
         instance = ApplicationInstance.objects.select_for_update().filter(pk=instance_id).first()
         binding = (ApplicationInstanceService.objects.select_for_update()
-                   .select_related("deploy", "service", "instance")
+                   .select_related("deploy", "service__plan", "instance")
                    .filter(instance_id=instance_id, service_key=service_key).first())
         if not instance or not binding:
             return
@@ -142,7 +142,19 @@ def gate_application_service(self, instance_id: str, service_key: str):
             binding.save(update_fields=["dispatch_task_id", "dispatched_at"])
             callback = advance_application_service.si(instance_id, service_key, child_task_id)
             failure = application_service_failed.si(instance_id, service_key, child_task_id)
-            transaction.on_commit(lambda: deploy_task.apply_async(args=[str(binding.deploy_id)], link=callback, link_error=failure, task_id=child_task_id))
+            platform = str(
+                getattr(getattr(binding.service, "plan", None), "platform", "") or ""
+            ).strip().lower()
+            child_task = run_db_deploy if platform in DB_PLATFORMS else deploy_task
+            transaction.on_commit(
+                lambda: child_task.apply_async(
+                    args=[str(binding.deploy_id)],
+                    link=callback,
+                    link_error=failure,
+                    task_id=child_task_id,
+                    queue="deployments",
+                )
+            )
         except Exception as exc:
             logger.exception("Application service gate failed for %s/%s", instance_id, service_key)
             binding.dispatched_at = None
