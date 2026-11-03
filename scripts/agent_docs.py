@@ -312,8 +312,18 @@ def audit() -> dict:
     model_coverage = {}
     for app, items in sorted(per_app.items()):
         doc_path = DOCS / "apps" / app / "models.md"
-        doc = read(doc_path).casefold()
-        missing = [item["title"] for item in items if item["title"].casefold() not in doc]
+        doc = read(doc_path)
+        # A model counts as documented only when it owns an explicit section
+        # heading. A stray mention in another model's prose or a field table
+        # is not evidence that the model itself has been explained.
+        headings = [
+            match.group(1).strip().casefold()
+            for match in re.finditer(r"^#{2,6}\\s+(.+?)\\s*$", doc, re.MULTILINE)
+        ]
+        missing = [
+            item["title"] for item in items
+            if not any(item["title"].casefold() in heading for heading in headings)
+        ]
         model_coverage[app] = {
             "source_models": len(items),
             "models_named_in_app_doc": len(items) - len(missing),
