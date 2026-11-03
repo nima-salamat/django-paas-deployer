@@ -228,6 +228,10 @@ def root_handler_apps() -> dict[str, str]:
         if not isinstance(node, ast.ImportFrom) or not node.module:
             continue
         app = node.module.split(".", 1)[0]
+        # Root URLConf also imports Django/Wagtail framework views. Only map
+        # handlers whose top-level module is an application in this checkout.
+        if not (SRC / app).is_dir():
+            continue
         for imported in node.names:
             if imported.name != "*":
                 result[imported.asname or imported.name] = app
