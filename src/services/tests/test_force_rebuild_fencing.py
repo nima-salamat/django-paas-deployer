@@ -107,8 +107,8 @@ def test_force_rebuild_does_not_teardown_when_lifecycle_lock_is_unavailable(monk
 
 
 def test_tenant_and_admin_force_rebuild_paths_fail_closed_on_teardown_error():
-    runtime_api = (ROOT / "api/runtime.py").read_text(encoding="utf-8")
-    admin_api = (ROOT / "api/admin_services.py").read_text(encoding="utf-8")
+    runtime_api = (ROOT / "services/api/runtime.py").read_text(encoding="utf-8")
+    admin_api = (ROOT / "services/api/admin_services.py").read_text(encoding="utf-8")
 
     for source in (runtime_api, admin_api):
         assert "fence_and_teardown_service_runtime(" in source
