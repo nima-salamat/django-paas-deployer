@@ -41,90 +41,149 @@ AgentPage collection endpoints accept page and page_size. Default page size is 2
 
 Every row below is copied from the centralized endpoint contract. `scopes` are all required. `any_scopes`, when present, adds an OR requirement on top of the required scopes. Therefore the two shell file/tool contracts that list both file scopes in `scopes` still require both scopes; their `any_scopes` entry is currently redundant and documented as such rather than silently changing runtime behavior.
 
-| Method | Endpoint | Path parameters | Required scopes | Any-of scopes | Mutating | Idempotent | Throttle |
-|---|---|---|---|---|---|---|---|
-| `GET` | `/agent/v1/` | — | — | — | no | no | `read` |
-| `GET` | `/agent/v1/skills` | — | — | — | no | no | `read` |
-| `GET` | `/agent/v1/skills/{skill_name}` | {skill_name} | — | — | no | no | `read` |
-| `POST` | `/agent/v1/auth/exchange` | — | — | — | no | no | `exchange` |
-| `GET` | `/agent/v1/auth/me` | — | — | — | no | no | `read` |
-| `GET` | `/agent/v1/capabilities` | — | — | — | no | no | `read` |
-| `GET` | `/agent/v1/openapi.json` | — | — | — | no | no | `read` |
-| `GET` | `/agent/v1/agent.md` | — | `agent.manifest.generate` | — | no | no | `mutation` |
-| `GET` | `/agent/v1/services` | — | `services.read` | — | no | no | `read` |
-| `POST` | `/agent/v1/services` | — | `services.create` | — | yes | yes | `mutation` |
-| `POST` | `/agent/v1/services/from-plan` | — | `services.create`, `plans.apply` | — | yes | yes | `mutation` |
-| `GET` | `/agent/v1/services/{service_id}` | {service_id} | `services.read` | — | no | no | `read` |
-| `PATCH` | `/agent/v1/services/{service_id}` | {service_id} | `services.update` | — | yes | yes | `mutation` |
-| `DELETE` | `/agent/v1/services/{service_id}` | {service_id} | `services.delete` | — | yes | yes | `mutation` |
-| `POST` | `/agent/v1/services/{service_id}/start` | {service_id} | `services.start` | — | yes | yes | `deployment` |
-| `POST` | `/agent/v1/services/{service_id}/stop` | {service_id} | `services.stop` | — | yes | yes | `deployment` |
-| `POST` | `/agent/v1/services/{service_id}/restart` | {service_id} | `services.restart` | — | yes | yes | `deployment` |
-| `POST` | `/agent/v1/services/{service_id}/rebuild` | {service_id} | `deployments.rebuild` | — | yes | yes | `deployment` |
-| `POST` | `/agent/v1/services/{service_id}/purge-runtime` | {service_id} | `services.purge` | — | yes | yes | `deployment` |
-| `GET` | `/agent/v1/services/{service_id}/status` | {service_id} | `services.read` | — | no | no | `read` |
-| `GET` | `/agent/v1/services/{service_id}/metrics` | {service_id} | `services.read` | — | no | no | `read` |
-| `GET` | `/agent/v1/services/{service_id}/logs` | {service_id} | `service_logs.read` | — | no | no | `read` |
-| `GET` | `/agent/v1/services/{service_id}/logs/export` | {service_id} | `service_logs.export` | — | no | no | `read` |
-| `GET` | `/agent/v1/services/{service_id}/configuration` | {service_id} | `service_config.read` | — | no | no | `read` |
-| `PATCH` | `/agent/v1/services/{service_id}/configuration` | {service_id} | `service_config.write` | — | yes | yes | `mutation` |
-| `GET` | `/agent/v1/services/{service_id}/environment` | {service_id} | `service_environment.read` | — | no | no | `read` |
-| `POST` | `/agent/v1/services/{service_id}/environment` | {service_id} | `service_environment.write` | — | yes | yes | `mutation` |
-| `DELETE` | `/agent/v1/services/{service_id}/environment` | {service_id} | `service_environment.write` | — | yes | yes | `mutation` |
-| `GET` | `/agent/v1/services/{service_id}/secrets` | {service_id} | `service_secrets.read` | — | no | no | `read` |
-| `POST` | `/agent/v1/services/{service_id}/secrets` | {service_id} | `service_secrets.write` | — | yes | yes | `mutation` |
-| `DELETE` | `/agent/v1/services/{service_id}/secrets` | {service_id} | `service_secrets.write` | — | yes | yes | `mutation` |
-| `GET` | `/agent/v1/services/{service_id}/endpoints` | {service_id} | `service_endpoints.read` | — | no | no | `read` |
-| `POST` | `/agent/v1/services/{service_id}/endpoints` | {service_id} | `service_endpoints.write` | — | yes | yes | `mutation` |
-| `DELETE` | `/agent/v1/services/{service_id}/endpoints` | {service_id} | `service_endpoints.write` | — | yes | yes | `mutation` |
-| `GET` | `/agent/v1/services/{service_id}/networks` | {service_id} | `service_networks.read` | — | no | no | `read` |
-| `POST` | `/agent/v1/services/{service_id}/networks` | {service_id} | `service_networks.write` | — | yes | yes | `mutation` |
-| `DELETE` | `/agent/v1/services/{service_id}/networks` | {service_id} | `service_networks.write` | — | yes | yes | `mutation` |
-| `GET` | `/agent/v1/services/{service_id}/databases` | {service_id} | `service_config.read` | — | no | no | `read` |
-| `POST` | `/agent/v1/services/{service_id}/databases` | {service_id} | `service_config.write` | — | yes | yes | `mutation` |
-| `DELETE` | `/agent/v1/services/{service_id}/databases` | {service_id} | `service_config.write` | — | yes | yes | `mutation` |
-| `GET` | `/agent/v1/services/{service_id}/database-credentials` | {service_id} | `service_database_credentials.read` | — | no | no | `read` |
-| `GET` | `/agent/v1/services/{service_id}/revisions` | {service_id} | `services.read` | — | no | no | `read` |
-| `GET` | `/agent/v1/services/{service_id}/revisions/{revision_id}` | {service_id}, {revision_id} | `services.read` | — | no | no | `read` |
-| `POST` | `/agent/v1/services/{service_id}/revisions/{revision_id}/rollback` | {service_id}, {revision_id} | `deployments.rollback` | — | yes | yes | `deployment` |
-| `GET` | `/agent/v1/services/{service_id}/shell` | {service_id} | `shell.read` | — | no | no | `shell` |
-| `POST` | `/agent/v1/services/{service_id}/shell/sessions` | {service_id} | `shell.read`, `shell.execute` | — | yes | no | `shell` |
-| `POST` | `/agent/v1/services/{service_id}/shell/sessions/{session_id}/commands` | {service_id}, {session_id} | `shell.execute` | — | yes | no | `shell` |
-| `POST` | `/agent/v1/services/{service_id}/shell/sessions/{session_id}/close` | {service_id}, {session_id} | `shell.execute` | — | yes | no | `shell` |
-| `POST` | `/agent/v1/services/{service_id}/shell/replace` | {service_id} | `shell.replace` | — | yes | no | `shell` |
-| `POST` | `/agent/v1/services/{service_id}/shell/files` | {service_id} | `shell.files.read`, `shell.files.write` | `shell.files.read`, `shell.files.write` | yes | no | `shell` |
-| `GET` | `/agent/v1/services/{service_id}/tools` | {service_id} | `shell.read`, `shell.execute` | `shell.read`, `shell.execute` | no | no | `shell` |
-| `POST` | `/agent/v1/services/{service_id}/tools/{tool_name}` | {service_id}, {tool_name} | `shell.read`, `shell.execute` | `shell.read`, `shell.execute` | yes | yes | `shell` |
-| `GET` | `/agent/v1/plans` | — | `plans.read` | — | no | no | `read` |
-| `GET` | `/agent/v1/plans/{plan_id}` | {plan_id} | `plans.read` | — | no | no | `read` |
-| `POST` | `/agent/v1/plans/{plan_id}/apply` | {plan_id} | `plans.apply`, `services.create` | — | yes | yes | `mutation` |
-| `POST` | `/agent/v1/plans/manage` | — | `plans.manage` | — | yes | yes | `mutation` |
-| `PATCH` | `/agent/v1/plans/manage/{plan_id}` | {plan_id} | `plans.manage` | — | yes | yes | `mutation` |
-| `DELETE` | `/agent/v1/plans/manage/{plan_id}` | {plan_id} | `plans.manage` | — | yes | yes | `mutation` |
-| `GET` | `/agent/v1/networks` | — | `service_networks.read` | — | no | no | `read` |
-| `POST` | `/agent/v1/networks` | — | `service_networks.write` | — | yes | yes | `mutation` |
-| `GET` | `/agent/v1/networks/{network_id}` | {network_id} | `service_networks.read` | — | no | no | `read` |
-| `PATCH` | `/agent/v1/networks/{network_id}` | {network_id} | `service_networks.write` | — | yes | yes | `mutation` |
-| `DELETE` | `/agent/v1/networks/{network_id}` | {network_id} | `service_networks.write` | — | yes | yes | `mutation` |
-| `GET` | `/agent/v1/volumes` | — | `service_volumes.read` | — | no | no | `read` |
-| `POST` | `/agent/v1/volumes` | — | `service_volumes.write` | — | yes | yes | `mutation` |
-| `GET` | `/agent/v1/volumes/{volume_id}` | {volume_id} | `service_volumes.read` | — | no | no | `read` |
-| `PATCH` | `/agent/v1/volumes/{volume_id}` | {volume_id} | `service_volumes.write` | — | yes | yes | `mutation` |
-| `DELETE` | `/agent/v1/volumes/{volume_id}` | {volume_id} | `service_volumes.write` | — | yes | yes | `mutation` |
-| `GET` | `/agent/v1/deployments` | — | `deployments.read` | — | no | no | `read` |
-| `POST` | `/agent/v1/deployments` | — | `deployments.create` | — | yes | yes | `mutation` |
-| `GET` | `/agent/v1/deployments/help` | — | `deployments.read` | — | no | no | `read` |
-| `POST` | `/agent/v1/deployments/inspect` | — | `deployments.upload` | — | no | no | `upload` |
-| `GET` | `/agent/v1/deployments/{deployment_id}` | {deployment_id} | `deployments.read` | — | no | no | `read` |
-| `DELETE` | `/agent/v1/deployments/{deployment_id}` | {deployment_id} | `deployments.delete` | — | yes | yes | `mutation` |
-| `POST` | `/agent/v1/deployments/{deployment_id}/upload` | {deployment_id} | `deployments.upload` | — | yes | yes | `upload` |
-| `POST` | `/agent/v1/deployments/{deployment_id}/start` | {deployment_id} | `deployments.start` | — | yes | yes | `deployment` |
-| `POST` | `/agent/v1/deployments/{deployment_id}/cancel` | {deployment_id} | `deployments.cancel` | — | yes | yes | `deployment` |
-| `POST` | `/agent/v1/deployments/{deployment_id}/redeploy` | {deployment_id} | `deployments.redeploy` | — | yes | yes | `deployment` |
-| `POST` | `/agent/v1/deployments/{deployment_id}/rebuild` | {deployment_id} | `deployments.rebuild` | — | yes | yes | `deployment` |
-| `POST` | `/agent/v1/deployments/{deployment_id}/rollback` | {deployment_id} | `deployments.rollback` | — | yes | yes | `deployment` |
-| `GET` | `/agent/v1/deployments/{deployment_id}/logs` | {deployment_id} | `deployments.logs.read` | — | no | no | `read` |
-| `GET` | `/agent/v1/deployments/{deployment_id}/logs/export` | {deployment_id} | `deployments.logs.export` | — | no | no | `read` |
+| Contracts in the next table are read from `src/agent/contracts.py`. `Required scopes (all)` must all be granted. `Any-of scopes` is an alternative set: at least one listed scope is required when this column is populated. The Purpose column explains the operation; request/response schemas and edge-case semantics remain in the sections below and in the implementation.
+
+| Method | Endpoint | Purpose | Path parameters | Required scopes (all) | Any-of scopes | Mutating | Idempotent | Throttle |
+|---|---|---|---|---|---|---|---|---|
+| `GET` | `/agent/v1/` | Returns the Agent API entry point and discovery links. | — | — | — | no | no | `read` |
+| `GET` | `/agent/v1/skills` | Lists available Agent operating Skills. | — | — | — | no | no | `read` |
+| `GET` | `/agent/v1/skills/{skill_name}` | Returns one named Skill document and its operating instructions. | `{skill_name}` | — | — | no | no | `read` |
+| `POST` | `/agent/v1/auth/exchange` | Exchanges a short-lived enrollment credential for a normal Agent access credential. | — | — | — | no | no | `exchange` |
+| `GET` | `/agent/v1/auth/me` | Returns the authenticated Agent identity and credential context. | — | — | — | no | no | `read` |
+| `GET` | `/agent/v1/capabilities` | Lists operations and capabilities available to this Agent under its granted scopes. | — | — | — | no | no | `read` |
+| `GET` | `/agent/v1/openapi.json` | Returns the machine-readable Agent API schema. | — | — | — | no | no | `read` |
+| `GET` | `/agent/v1/context` | Returns the combined Agent bootstrap context, identity, capabilities and Skill index. | — | — | — | no | no | `read` |
+| `GET` | `/agent/v1/agent.md` | Generates the Agent bootstrap manifest and usage instructions. | — | `agent.manifest.generate` | — | no | no | `mutation` |
+| `GET` | `/agent/v1/services` | Lists Services accessible to the Agent owner. | — | `services.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/services` | Creates a Service for the Agent owner. | — | `services.create` | — | yes | yes | `mutation` |
+| `POST` | `/agent/v1/services/from-plan` | Creates a Service from a selected plan, including optional network setup. | — | `services.create`, `plans.apply` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/services/{service_id}` | Reads Service details. | `{service_id}` | `services.read` | — | no | no | `read` |
+| `PATCH` | `/agent/v1/services/{service_id}` | Updates writable Service configuration fields. | `{service_id}` | `services.update` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/services/{service_id}` | Deletes an eligible Service and its owned resources. | `{service_id}` | `services.delete` | — | yes | yes | `mutation` |
+| `POST` | `/agent/v1/services/{service_id}/start` | Requests the Service to run and queues start work when needed. | `{service_id}` | `services.start` | — | yes | yes | `deployment` |
+| `POST` | `/agent/v1/services/{service_id}/stop` | Requests the Service to stop and queues the stop lifecycle operation. | `{service_id}` | `services.stop` | — | yes | yes | `deployment` |
+| `POST` | `/agent/v1/services/{service_id}/restart` | Queues an ordered restart of the existing active runtime. | `{service_id}` | `services.restart` | — | yes | yes | `deployment` |
+| `POST` | `/agent/v1/services/{service_id}/rebuild` | Rebuilds and re-applies the Service's active revision. | `{service_id}` | `deployments.rebuild` | — | yes | yes | `deployment` |
+| `POST` | `/agent/v1/services/{service_id}/purge-runtime` | Removes the current owned runtime/container and its associated runtime image resources. | `{service_id}` | `services.purge` | — | yes | yes | `deployment` |
+| `GET` | `/agent/v1/services/{service_id}/status` | Returns the observed Service status. | `{service_id}` | `services.read` | — | no | no | `read` |
+| `GET` | `/agent/v1/services/{service_id}/metrics` | Returns observed runtime CPU/RAM metrics alongside plan limits. | `{service_id}` | `services.read` | — | no | no | `read` |
+| `GET` | `/agent/v1/services/{service_id}/logs` | Queries Service runtime log history. | `{service_id}` | `service_logs.read` | — | no | no | `read` |
+| `GET` | `/agent/v1/services/{service_id}/logs/export` | Exports the Service runtime log history. | `{service_id}` | `service_logs.export` | — | no | no | `read` |
+| `GET` | `/agent/v1/services/{service_id}/configuration` | Reads or updates the Service source/build/runtime configuration. | `{service_id}` | `service_config.read` | — | no | no | `read` |
+| `PATCH` | `/agent/v1/services/{service_id}/configuration` | Reads or updates the Service source/build/runtime configuration. | `{service_id}` | `service_config.write` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/services/{service_id}/environment` | Lists, creates/updates or removes Service environment variables. | `{service_id}` | `service_environment.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/services/{service_id}/environment` | Lists, creates/updates or removes Service environment variables. | `{service_id}` | `service_environment.write` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/services/{service_id}/environment` | Lists, creates/updates or removes Service environment variables. | `{service_id}` | `service_environment.write` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/services/{service_id}/secrets` | Lists secret metadata, writes encrypted secret versions or removes a secret. | `{service_id}` | `service_secrets.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/services/{service_id}/secrets` | Lists secret metadata, writes encrypted secret versions or removes a secret. | `{service_id}` | `service_secrets.write` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/services/{service_id}/secrets` | Lists secret metadata, writes encrypted secret versions or removes a secret. | `{service_id}` | `service_secrets.write` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/services/{service_id}/endpoints` | Lists, creates or removes Service endpoints and published-port configuration. | `{service_id}` | `service_endpoints.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/services/{service_id}/endpoints` | Lists, creates or removes Service endpoints and published-port configuration. | `{service_id}` | `service_endpoints.write` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/services/{service_id}/endpoints` | Lists, creates or removes Service endpoints and published-port configuration. | `{service_id}` | `service_endpoints.write` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/services/{service_id}/networks` | Lists, attaches or detaches private network attachments for the Service. | `{service_id}` | `service_networks.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/services/{service_id}/networks` | Lists, attaches or detaches private network attachments for the Service. | `{service_id}` | `service_networks.write` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/services/{service_id}/networks` | Lists, attaches or detaches private network attachments for the Service. | `{service_id}` | `service_networks.write` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/services/{service_id}/databases` | Lists, creates or removes Service-to-database bindings/resources. | `{service_id}` | `service_config.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/services/{service_id}/databases` | Lists, creates or removes Service-to-database bindings/resources. | `{service_id}` | `service_config.write` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/services/{service_id}/databases` | Lists, creates or removes Service-to-database bindings/resources. | `{service_id}` | `service_config.write` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/services/{service_id}/database-credentials` | Reveals database connection credentials under the dedicated high-risk scope. | `{service_id}` | `service_database_credentials.read` | — | no | no | `read` |
+| `GET` | `/agent/v1/services/{service_id}/revisions` | Lists immutable Service revisions. | `{service_id}` | `services.read` | — | no | no | `read` |
+| `GET` | `/agent/v1/services/{service_id}/revisions/{revision_id}` | Reads one immutable Service revision and its captured configuration snapshot. | `{service_id}`, `{revision_id}` | `services.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/services/{service_id}/revisions/{revision_id}/rollback` | Queues rollback to the selected immutable Service revision. | `{service_id}`, `{revision_id}` | `deployments.rollback` | — | yes | yes | `deployment` |
+| `GET` | `/agent/v1/services/{service_id}/shell` | Returns restricted shell access information and available capabilities. | `{service_id}` | `shell.read` | — | no | no | `shell` |
+| `POST` | `/agent/v1/services/{service_id}/shell/sessions` | Creates a short-lived restricted shell/PTY session. | `{service_id}` | `shell.read`, `shell.execute` | — | yes | no | `shell` |
+| `POST` | `/agent/v1/services/{service_id}/shell/sessions/{session_id}/commands` | Executes a validated command in the selected shell session. | `{service_id}`, `{session_id}` | `shell.execute` | — | yes | no | `shell` |
+| `POST` | `/agent/v1/services/{service_id}/shell/sessions/{session_id}/close` | Closes the shell session and releases its resources. | `{service_id}`, `{session_id}` | `shell.execute` | — | yes | no | `shell` |
+| `POST` | `/agent/v1/services/{service_id}/shell/replace` | Replaces the Service runtime through the dedicated shell replacement workflow. | `{service_id}` | `shell.replace` | — | yes | no | `shell` |
+| `POST` | `/agent/v1/services/{service_id}/shell/files` | Performs a supported single-file workspace action such as read, write, create, rename, upload or delete. | `{service_id}` | `shell.files.read`, `shell.files.write` | `shell.files.read`, `shell.files.write` | yes | no | `shell` |
+| `GET` | `/agent/v1/services/{service_id}/workspace/tree` | Lists the Service workspace directory tree. | `{service_id}` | `shell.files.read` | — | no | no | `shell` |
+| `POST` | `/agent/v1/services/{service_id}/workspace/read-many` | Reads multiple workspace files in one bounded request. | `{service_id}` | `shell.files.read` | — | no | no | `shell` |
+| `POST` | `/agent/v1/services/{service_id}/workspace/write-many` | Writes multiple existing text files with bounded, validated write semantics. | `{service_id}` | `shell.files.write` | — | yes | yes | `shell` |
+| `POST` | `/agent/v1/services/{service_id}/workspace/patch` | Applies an exact-context workspace patch with precondition checks. | `{service_id}` | `shell.files.write` | — | yes | yes | `shell` |
+| `POST` | `/agent/v1/services/{service_id}/workspace/search` | Searches text within the Service workspace. | `{service_id}` | `shell.files.read` | — | no | no | `shell` |
+| `POST` | `/agent/v1/services/{service_id}/commands/batch` | Executes a bounded sequential batch of validated argv commands. | `{service_id}` | `shell.execute` | — | yes | yes | `shell` |
+| `POST` | `/agent/v1/services/{service_id}/mcp` | Provides stateless MCP tool discovery and invocation scoped to this Service. | `{service_id}` | `services.read`, `shell.read`, `shell.execute`, `shell.files.read`, `shell.files.write` | `services.read`, `shell.read`, `shell.execute`, `shell.files.read`, `shell.files.write` | no | no | `shell` |
+| `GET` | `/agent/v1/services/{service_id}/tools` | Lists available restricted runtime tools. | `{service_id}` | `shell.read`, `shell.execute` | `shell.read`, `shell.execute` | no | no | `shell` |
+| `POST` | `/agent/v1/services/{service_id}/tools/{tool_name}` | Invokes one named restricted runtime tool. | `{service_id}`, `{tool_name}` | `shell.read`, `shell.execute` | `shell.read`, `shell.execute` | yes | yes | `shell` |
+| `GET` | `/agent/v1/plans` | Lists Plans available to the Agent. | — | `plans.read` | — | no | no | `read` |
+| `GET` | `/agent/v1/plans/{plan_id}` | Reads one Plan and its resource limits. | `{plan_id}` | `plans.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/plans/{plan_id}/apply` | Applies the selected Plan to create/configure a Service. | `{plan_id}` | `plans.apply`, `services.create` | — | yes | yes | `mutation` |
+| `POST` | `/agent/v1/plans/manage` | Creates a Plan through the privileged plan-management scope. | — | `plans.manage` | — | yes | yes | `mutation` |
+| `PATCH` | `/agent/v1/plans/manage/{plan_id}` | Updates an existing Plan. | `{plan_id}` | `plans.manage` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/plans/manage/{plan_id}` | Deletes an existing Plan. | `{plan_id}` | `plans.manage` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/networks` | Lists, attaches or detaches private network attachments for the Service. | — | `service_networks.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/networks` | Lists, attaches or detaches private network attachments for the Service. | — | `service_networks.write` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/networks/{network_id}` | Reads one private network. | `{network_id}` | `service_networks.read` | — | no | no | `read` |
+| `PATCH` | `/agent/v1/networks/{network_id}` | Updates private-network metadata. | `{network_id}` | `service_networks.write` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/networks/{network_id}` | Deletes an eligible private network. | `{network_id}` | `service_networks.write` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/volumes` | Lists the owner's Service-scoped persistent volumes. | — | `service_volumes.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/volumes` | Creates a persistent volume for an existing Service. | — | `service_volumes.write` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/volumes/{volume_id}` | Reads one volume. | `{volume_id}` | `service_volumes.read` | — | no | no | `read` |
+| `PATCH` | `/agent/v1/volumes/{volume_id}` | Updates eligible volume settings or attachment state. | `{volume_id}` | `service_volumes.write` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/volumes/{volume_id}` | Deletes an eligible volume. | `{volume_id}` | `service_volumes.write` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/deployments` | Lists deployment attempts accessible to the Agent owner. | — | `deployments.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/deployments` | Creates a deployment attempt for an existing Service. | — | `deployments.create` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/deployments/help` | Returns deployment source/platform/configuration and lifecycle guidance. | — | `deployments.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/deployments/inspect` | Inspects an uploaded project archive and suggests build/runtime configuration; it does not deploy it. | — | `deployments.upload` | — | no | no | `upload` |
+| `GET` | `/agent/v1/deployments/{deployment_id}` | Reads one deployment and its current lifecycle state. | `{deployment_id}` | `deployments.read` | — | no | no | `read` |
+| `DELETE` | `/agent/v1/deployments/{deployment_id}` | Deletes an eligible deployment record. | `{deployment_id}` | `deployments.delete` | — | yes | yes | `mutation` |
+| `POST` | `/agent/v1/deployments/{deployment_id}/upload` | Uploads the source archive for an existing deployment. | `{deployment_id}` | `deployments.upload` | — | yes | yes | `upload` |
+| `POST` | `/agent/v1/deployments/{deployment_id}/start` | Requests the Service to run and queues start work when needed. | `{deployment_id}` | `deployments.start` | — | yes | yes | `deployment` |
+| `POST` | `/agent/v1/deployments/{deployment_id}/cancel` | Requests cancellation of the selected deployment. | `{deployment_id}` | `deployments.cancel` | — | yes | yes | `deployment` |
+| `POST` | `/agent/v1/deployments/{deployment_id}/redeploy` | Re-executes the selected deployment using its existing configuration. | `{deployment_id}` | `deployments.redeploy` | — | yes | yes | `deployment` |
+| `POST` | `/agent/v1/deployments/{deployment_id}/rebuild` | Rebuilds and re-applies the Service's active revision. | `{deployment_id}` | `deployments.rebuild` | — | yes | yes | `deployment` |
+| `POST` | `/agent/v1/deployments/{deployment_id}/rollback` | Queues rollback to the previous eligible release. | `{deployment_id}` | `deployments.rollback` | — | yes | yes | `deployment` |
+| `GET` | `/agent/v1/deployments/{deployment_id}/logs` | Queries Service runtime log history. | `{deployment_id}` | `deployments.logs.read` | — | no | no | `read` |
+| `GET` | `/agent/v1/deployments/{deployment_id}/logs/export` | Exports the Service runtime log history. | `{deployment_id}` | `deployments.logs.export` | — | no | no | `read` |
+| `GET` | `/agent/v1/messenger/users/search` | Searches Messenger users that the Agent can discover. | — | `messenger.users.search` | — | no | no | `read` |
+| `GET` | `/agent/v1/messenger/contacts` | Lists the owner's Messenger contacts. | — | `messenger.contacts.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/messenger/contacts` | Adds a contact for the Agent owner. | — | `messenger.contacts.write` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/messenger/contacts/{user_id}` | Removes a contact relationship. | `{user_id}` | `messenger.contacts.write` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/messenger/blocks` | Lists blocked users. | — | `messenger.blocks.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/messenger/blocks` | Blocks a user. | — | `messenger.blocks.write` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/messenger/blocks/{user_id}` | Unblocks a user. | `{user_id}` | `messenger.blocks.write` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/messenger/conversations` | Lists standard Messenger conversations visible to the owner. | — | `messenger.conversations.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/messenger/conversations` | Creates a standard private or group conversation. | — | `messenger.conversations.create` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/messenger/conversations/{conversation_id}` | Reads conversation metadata and membership state. | `{conversation_id}` | `messenger.conversations.read` | — | no | no | `read` |
+| `PATCH` | `/agent/v1/messenger/conversations/{conversation_id}` | Updates conversation metadata or group settings. | `{conversation_id}` | `messenger.conversations.update` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/messenger/conversations/{conversation_id}` | Deletes a conversation subject to group/private-chat ownership rules. | `{conversation_id}` | `messenger.conversations.delete` | — | yes | yes | `mutation` |
+| `POST` | `/agent/v1/messenger/conversations/{conversation_id}/clear-history` | Permanently clears conversation message history and media under owner/admin rules. | `{conversation_id}` | `messenger.conversations.history.clear` | — | yes | yes | `mutation` |
+| `POST` | `/agent/v1/messenger/conversations/{conversation_id}/invite-links` | Creates a join invite link for a group conversation. | `{conversation_id}` | `messenger.invites.create` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/messenger/conversations/{conversation_id}/invite-links/{link_id}` | Revokes a group invite link. | `{conversation_id}`, `{link_id}` | `messenger.invites.revoke` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/messenger/conversations/{conversation_id}/messages` | Lists messages in an authorized conversation. | `{conversation_id}` | `messenger.messages.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/messenger/conversations/{conversation_id}/messages` | Sends a message to an authorized conversation. | `{conversation_id}` | `messenger.messages.send` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/messenger/conversations/{conversation_id}/messages/search` | Searches message history within an authorized conversation. | `{conversation_id}` | `messenger.messages.search` | — | no | no | `read` |
+| `GET` | `/agent/v1/messenger/conversations/{conversation_id}/scheduled` | Lists scheduled messages in the selected conversation. | `{conversation_id}` | `messenger.messages.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/messenger/conversations/{conversation_id}/read` | Marks the conversation as read for the Agent owner. | `{conversation_id}` | `messenger.messages.read_state.write` | — | yes | yes | `mutation` |
+| `POST` | `/agent/v1/messenger/messages/{message_id}/react` | Adds or toggles the Agent owner's reaction to a message. | `{message_id}` | `messenger.messages.react` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/messenger/messages/{message_id}/react` | Removes the Agent owner's selected reaction. | `{message_id}` | `messenger.messages.reactions.remove` | — | yes | yes | `mutation` |
+| `PUT` | `/agent/v1/messenger/messages/{message_id}/pin` | Pins a message in its conversation. | `{message_id}` | `messenger.messages.pin` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/messenger/messages/{message_id}/pin` | Unpins a message from its conversation. | `{message_id}` | `messenger.messages.unpin` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/messenger/conversations/{conversation_id}/pinned-messages` | Lists pinned messages visible to the conversation member. | `{conversation_id}` | `messenger.messages.pinned.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/messenger/messages/{message_id}/forward` | Forwards a message to another eligible conversation. | `{message_id}` | `messenger.messages.read`, `messenger.messages.send`, `messenger.messages.forward` | — | yes | yes | `mutation` |
+| `PATCH` | `/agent/v1/messenger/messages/{message_id}/edit` | Edits a message sent by the Agent owner. | `{message_id}` | `messenger.messages.edit` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/messenger/messages/{message_id}` | Deletes a message under sender/permission rules. | `{message_id}` | `messenger.messages.delete` | — | yes | yes | `mutation` |
+| `POST` | `/agent/v1/messenger/messages/{message_id}/cancel-schedule` | Cancels a scheduled message before delivery. | `{message_id}` | `messenger.messages.schedule` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/messenger/groups/search` | Searches public groups the owner can discover. | — | `messenger.groups.search` | — | no | no | `read` |
+| `POST` | `/agent/v1/messenger/groups/{conversation_id}/join` | Requests or completes joining a public group according to its approval policy. | `{conversation_id}` | `messenger.groups.join` | — | yes | yes | `mutation` |
+| `POST` | `/agent/v1/messenger/join` | Joins a group using an invite code supplied in the request body. | — | `messenger.invites.join` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/messenger/me/join-requests` | Lists the owner's own group join requests. | — | `messenger.join_requests.own.read` | — | no | no | `read` |
+| `DELETE` | `/agent/v1/messenger/join-requests/{request_id}` | Cancels the owner's pending join request. | `{request_id}` | `messenger.join_requests.own.cancel` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/messenger/conversations/{conversation_id}/participants` | Lists active conversation participants and roles. | `{conversation_id}` | `messenger.members.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/messenger/conversations/{conversation_id}/members` | Adds a member to a group conversation. | `{conversation_id}` | `messenger.members.manage` | — | yes | yes | `mutation` |
+| `DELETE` | `/agent/v1/messenger/conversations/{conversation_id}/members/{user_id}` | Removes a participant from a group. | `{conversation_id}`, `{user_id}` | `messenger.members.manage` | — | yes | yes | `mutation` |
+| `POST` | `/agent/v1/messenger/conversations/{conversation_id}/members/{user_id}/role` | Changes a participant's group role. | `{conversation_id}`, `{user_id}` | `messenger.permissions.manage` | — | yes | yes | `mutation` |
+| `PATCH` | `/agent/v1/messenger/conversations/{conversation_id}/members/{user_id}/permissions` | Updates granular permissions for a group participant. | `{conversation_id}`, `{user_id}` | `messenger.permissions.manage` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/messenger/conversations/{conversation_id}/join-requests` | Lists pending group join requests for moderators. | `{conversation_id}` | `messenger.join_requests.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/messenger/conversations/{conversation_id}/join-requests/{request_id}/action` | Approves or rejects a pending group join request. | `{conversation_id}`, `{request_id}` | `messenger.join_requests.manage` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/tickets/departments` | Lists support departments available for ticket creation. | — | `tickets.departments.read` | — | no | no | `read` |
+| `GET` | `/agent/v1/tickets/context` | Returns the combined Agent bootstrap context, identity, capabilities and Skill index. | — | `tickets.context.read` | — | no | no | `read` |
+| `GET` | `/agent/v1/tickets` | Lists support tickets owned by the Agent owner. | — | `tickets.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/tickets` | Creates a support ticket for the Agent owner. | — | `tickets.create` | — | yes | yes | `mutation` |
+| `GET` | `/agent/v1/tickets/{ticket_id}` | Reads one support ticket and its permitted message history. | `{ticket_id}` | `tickets.read` | — | no | no | `read` |
+| `POST` | `/agent/v1/tickets/{ticket_id}/messages` | Adds a reply and optional attachments to an owned ticket. | `{ticket_id}` | `tickets.reply` | — | yes | yes | `mutation` |
+| `POST` | `/agent/v1/tickets/{ticket_id}/read` | Marks ticket messages as read for the Agent owner. | `{ticket_id}` | `tickets.read_state.write` | — | yes | yes | `mutation` |
+| `POST` | `/agent/v1/tickets/{ticket_id}/close` | Closes an owned support ticket. | `{ticket_id}` | `tickets.close` | — | yes | yes | `mutation` |
 
 ## Request body schemas
 
