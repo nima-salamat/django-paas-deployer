@@ -81,8 +81,8 @@ def test_system_lookup_finds_deployment_reconciliation_documentation():
 def test_agent_api_matrix_covers_every_central_contract_with_a_purpose():
     import re
 
-    contracts = (ROOT / "agent" / "contracts.py").read_text(encoding="utf-8")
-    api_docs = (ROOT / "../documentation/apps/agent/api.md").read_text(encoding="utf-8")
+    contracts = (ROOT / "src" / "agent" / "contracts.py").read_text(encoding="utf-8")
+    api_docs = (ROOT / "documentation" / "apps" / "agent" / "api.md").read_text(encoding="utf-8")
     entries = re.findall(
         r'_contract\("([^"]+)",\s*"([^"]+)"',
         contracts,
