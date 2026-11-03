@@ -115,3 +115,16 @@ def test_documentation_audit_has_no_model_or_api_guide_gaps():
     assert report["persisted_models_discovered"] == 91
     assert report["abstract_models_discovered"] == 1
     assert report["abstract_models"][0]["model"] == "PermissionMixin"
+
+
+def test_root_mounted_service_status_alias_is_attributed_to_services_app():
+    payload = _search("/api/services/service_status/", "--kind", "api")
+
+    assert payload["count"] > 0
+    assert any(
+        item["source"]
+        and item["app"] == "services"
+        and item["path"] == "src/config/urls.py"
+        and "/api/services/service_status/" in item["title"]
+        for item in payload["results"]
+    )
