@@ -1,70 +1,67 @@
-# users — detailed API route reference
+# users — detailed endpoint behavior reference
 
-This page is a source-derived route inventory. Path parameters are required by the URL shape. Request fields shown as observed are read by the implementation; endpoint-specific validation remains authoritative in the handler/serializer.
+Root mounts are `/users/` and `/api/users/`. Customer endpoints use SessionJWTAuthentication + IsAuthenticated. Admin endpoints require the declared staff/rule or superuser boundary. Contact values are not changed by a normal profile update; they use the OTP-backed contact-change workflow.
 
-## Request flow
+## Endpoint behavior matrix
 
-```mermaid
-flowchart LR
-    C[Client] --> Auth[Authentication]
-    Auth --> Perm[Permission / ownership]
-    Perm --> Validate[Serializer / handler validation]
-    Validate --> DB[Durable model state]
-    DB --> Async[Optional Celery / side effect]
-```
+### Personal account, password and profile
 
-## Endpoint matrix
-
-| Route declaration | Handler | Request fields observed in source | Requiredness / notes |
+| Method | Route | Handler | What it does |
 |---|---|---|---|
-| `admin/permissions/` | `AdminPermissionCatalogAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `admin/me/permissions/` | `MePermissionsAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `admin/users/` | `AdminUserListAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `admin/users/<int:pk>/` | `AdminUserDetailAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | path `pk` required ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `admin/users/<int:pk>/rules/` | `AdminUserRulesAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | path `pk` required ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `admin/users/<int:pk>/sessions/` | `AdminUserSessionListAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | path `pk` required ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `admin/users/<int:pk>/sessions/logout-all/` | `AdminUserSessionLogoutAllAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | path `pk` required ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `admin/users/<int:pk>/sessions/<str:session_id>/` | `AdminUserSessionRevokeAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | path `pk` required, path `session_id` required ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `user/` | `UserAPIView` |
-| `user/language/` | `LanguagePreferenceAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `profile/list/` | `ProfileViewSet` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `profile/order/` | `ProfileViewSet` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `profile/delete/` | `ProfileViewSet` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `profile/set/` | `ProfileViewSet` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `password/status/` | `PasswordStatusAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `password/set/` | `SetPasswordAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `password/change/` | `ChangePasswordAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `password/remove/` | `RemovePasswordAPIView` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `plans/` | `view` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
-| `plans/` | `view` | `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` | no path parameter ; handler-module inputs include `id`, `email`, `hard`, `image`, `is_active`, `is_staff`, `is_superuser`, `order`, `orders`, `password`, `rules`, `username`, `code`, `phone_number`, `field`, `limit`, `page`, `page_size`, `q` |
+| GET | `/users/user/` | UserAPIView | Returns the authenticated user's account representation. |
+| PUT | `/users/user/` | UserAPIView | Updates permitted profile/account fields; direct email/phone mutation is rejected. |
+| GET, POST | `/users/profile/list/` | ProfileViewSet.list | Lists the current user's profile images (POST is a compatibility alias of the same list action). |
+| POST | `/users/profile/order/` | ProfileViewSet.order | Reorders profile images owned by the caller. |
+| POST | `/users/profile/delete/` | ProfileViewSet.delete | Deletes a profile image only when it belongs to the caller. |
+| POST | `/users/profile/set/` | ProfileViewSet.set | Uploads a validated profile image; the model enforces the per-user image cap. |
+| GET | `/users/password/status/` | PasswordStatusAPIView | Reports whether the current account has a usable password. |
+| POST | `/users/password/set/` | SetPasswordAPIView | Sets an initial password only when the account does not already have one. |
+| POST | `/users/password/change/` | ChangePasswordAPIView | Changes an existing password after checking the current password and validating the replacement. |
+| DELETE | `/users/password/remove/` | RemovePasswordAPIView | Removes the usable password after verifying the current password. |
 
-## Observed request keys
+### Contact and language aliases
 
-| Key | Typical role | Optionality |
-|---|---|---|
-| `code` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `email` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `field` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `hard` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `id` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `image` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `is_active` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `is_staff` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `is_superuser` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `limit` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `order` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `orders` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `page` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `page_size` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `password` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `phone_number` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `q` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `rules` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `username` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
+| Method | Route | Handler | What it does |
+|---|---|---|---|
+| GET | `/api/users/user/` | UserAPIView | Same account representation as the /users/ mount. |
+| PUT | `/api/users/user/` | UserAPIView | Same safe profile update contract as the /users/ mount. |
+| GET | `/api/users/user/language/` | LanguagePreferenceAPIView | Returns the saved language preference and supported choices. |
+| PATCH | `/api/users/user/language/` | LanguagePreferenceAPIView | Changes the caller's language preference to a supported value. |
+| POST | `/api/users/user/contact-change/` | ContactChangeRequestAPIView | Starts a verified email or phone change and sends a purpose-scoped OTP; exactly one destination is supplied. |
+| POST | `/api/users/user/contact-change/<uuid:change_id>/confirm/` | ContactChangeConfirmAPIView | Confirms the OTP, applies the pending contact change and invalidates existing sessions. |
+| GET | `/api/users/password-status/` | PasswordStatusAPIView | Alias for current password-status read. |
+| POST | `/api/users/set-password/` | SetPasswordAPIView | Alias for initial password setup. |
+| POST | `/api/users/change-password/` | ChangePasswordAPIView | Alias for password change. |
+| DELETE | `/api/users/remove-password/` | RemovePasswordAPIView | Alias for password removal. |
 
-## Source of truth
+### Administrative identity and session management
 
-The URL declaration, handler implementation and serializer validation are authoritative. This reference deliberately does not invent requiredness when the code makes it conditional on login settings, ownership, resource state or another field.
+| Method | Route | Handler | What it does |
+|---|---|---|---|
+| GET | `/users/admin/permissions/`, `/api/users/admin/permissions/` | AdminPermissionCatalogAPIView | Lists the permission/rule catalogue available to the admin UI. |
+| GET | `/users/admin/me/permissions/`, `/api/users/admin/me/permissions/` | MePermissionsAPIView | Returns the authenticated administrator's effective permission set. |
+| GET | `/users/admin/users/`, `/api/users/admin/users/` | AdminUserListAPIView | Lists users within the administrator's user-management permission boundary. |
+| GET, PUT, PATCH, DELETE | `/users/admin/users/<int:pk>/`, `/api/users/admin/users/<int:pk>/` | AdminUserDetailAPIView | Reads, updates or deletes one target user under admin rules. |
+| GET, POST, PATCH | `/users/admin/users/<int:pk>/rules/`, `/api/users/admin/users/<int:pk>/rules/` | AdminUserRulesAPIView | Reads and changes a user's assigned permission rules. |
+| GET | `/users/admin/users/<int:pk>/sessions/`, `/api/users/admin/users/<int:pk>/sessions/` | AdminUserSessionListAPIView | Lists a target user's sessions under auth_sessions.view/manage. |
+| POST | `/users/admin/users/<int:pk>/sessions/logout-all/`, `/api/users/admin/users/<int:pk>/sessions/logout-all/` | AdminUserSessionLogoutAllAPIView | Revokes all eligible sessions for the target user. |
+| DELETE | `/users/admin/users/<int:pk>/sessions/<str:session_id>/`, `/api/users/admin/users/<int:pk>/sessions/<str:session_id>/` | AdminUserSessionRevokeAPIView | Revokes one target user's session. |
+
+### Admin table browser and per-user profile management
+
+| Method | Route | Handler | What it does |
+|---|---|---|---|
+| GET, POST | `/api/users/admin/tables/` | AdminTableListView | Lists allowed model/table descriptors or creates a row through the constrained admin table contract. |
+| GET | `/api/users/admin/tables/<str:model_key>/` | AdminTableRowsView | Lists rows for an allow-listed model key. |
+| GET | `/api/users/admin/tables/<str:model_key>/fk-search/` | AdminTableFKSearchAPIView | Searches selectable related rows for a foreign-key editor. |
+| GET, PATCH, DELETE | `/api/users/admin/tables/<str:model_key>/<str:pk>/` | AdminTableRowView | Reads, updates or deletes one allow-listed row after model/field permission checks. |
+| GET, POST | `/api/users/admin/users/<int:pk>/profiles/` | AdminProfileListCreateAPIView | Lists a target user's profile images or uploads an image for that user. |
+| POST | `/api/users/admin/users/<int:pk>/profiles/reorder/` | AdminProfileReorderAPIView | Reorders a target user's profile images. |
+| PATCH, DELETE | `/api/users/admin/users/<int:pk>/profiles/<int:profile_id>/` | AdminProfileDetailAPIView | Updates metadata or deletes one target user's profile image. |
+
+`/users/plans/` is an include of the Plans router/HTML surface; use the [Plans API reference](../plans/api.md) for that contract.
+
+The endpoint-specific payload requirements and validation rules follow below. They are intentionally not inferred from fields read by unrelated handlers in the same Python module.
 
 ## Personal account endpoints
 
