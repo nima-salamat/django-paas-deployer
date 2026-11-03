@@ -122,7 +122,7 @@ def test_tenant_and_admin_force_rebuild_paths_fail_closed_on_teardown_error():
 
 @pytest.mark.django_db
 def test_teardown_failure_marks_service_stopped_and_deploy_for_reconciliation():
-    from core.global_settings.config import PlanTypeChoices, StorageTypeChoices
+    from core.global_settings.config import NameChoices, PlanTypeChoices, StorageTypeChoices
     from deploy.models import Deploy, DeploymentStatusChoices
     from plans.models import Plan
     from services.models import PrivateNetwork, Service
@@ -133,7 +133,7 @@ def test_teardown_failure_marks_service_stopped_and_deploy_for_reconciliation():
         email="force-rebuild-failure@example.invalid",
     )
     plan = Plan.objects.create(
-        name="Force rebuild fixture",
+        name=NameChoices.BRONZE,
         platform="docker",
         plan_type=PlanTypeChoices.APP,
         max_cpu=1.0,
@@ -183,7 +183,7 @@ def test_teardown_failure_marks_service_stopped_and_deploy_for_reconciliation():
 
 @pytest.mark.django_db
 def test_new_deploy_captures_ready_app_lifecycle_generation_and_active_revision():
-    from core.global_settings.config import PlanTypeChoices, StorageTypeChoices
+    from core.global_settings.config import NameChoices, PlanTypeChoices, StorageTypeChoices
     from deploy.models import Deploy
     from plans.models import Plan
     from services.models import PrivateNetwork, Service, ServiceRevision
@@ -194,7 +194,7 @@ def test_new_deploy_captures_ready_app_lifecycle_generation_and_active_revision(
         email="ready-app-generation-capture@example.invalid",
     )
     plan = Plan.objects.create(
-        name="Ready App generation fixture",
+        name=NameChoices.BRONZE,
         platform="docker",
         plan_type=PlanTypeChoices.APP,
         max_cpu=1.0,
