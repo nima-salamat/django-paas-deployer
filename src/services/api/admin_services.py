@@ -448,6 +448,7 @@ def admin_start_service_apiview(request):
         "true",
         "yes",
     )
+    teardown_error = None
 
     try:
         with transaction.atomic():
@@ -500,70 +501,75 @@ def admin_start_service_apiview(request):
                 cfg["platform"] = platform
                 Deploy.objects.filter(pk=deploy_item.pk).update(config=cfg)
 
-            if force_rebuild:
-                container_name = service_item.get_docker_service_name()
-                try:
-                    if is_db:
-                        DBDeployer().remove(container_name)
-                    elif swarm_enabled():
-                        SwarmRuntime().remove_service_group(str(service_item.pk))
-                    else:
-                        OrchestratorDeploy.remove_all(container_name)
-                except Exception as exc:
-                    logger.warning(
-                        "start_service force_rebuild teardown warning "
-                        "for service '%s': %s",
-                        service_id,
-                        exc,
-                    )
-
+            from services.lifecycle.rebuild import (
+                fence_and_teardown_service_runtime,
+                record_force_rebuild_teardown_failure,
+            )
             from services.lifecycle import bump_lifecycle
             from deployments.core.state.manager import StateManager
 
-            generation = bump_lifecycle(service_item.pk, desired_state="running")
-            service_item.refresh_from_db(fields=["active_revision_id"])
-            task_id = make_uuid4()
-            StateManager.transition_service(
-                service_item.pk,
-                SERVICE_STATUS_CHOICES.QUEUED,
-                update_fields={
-                    "deploy_started": timezone.now(),
-                    "task_id": task_id,
-                    "desired_state": "running",
-                    "lifecycle_generation": generation,
-                },
-            )
-
-            Deploy.objects.filter(pk=deploy_item.pk).update(
-                status="pending",
-                stage="queued",
-                progress=0,
-                status_message="Rebuild queued."
-                if force_rebuild
-                else "Deployment queued.",
-                error_message="",
-                cancel_requested=False,
-                expected_lifecycle_generation=generation,
-                expected_active_revision_id=str(service_item.active_revision_id or ""),
-                worker_recovery_attempts=0,
-            )
-
-            if is_db:
-                transaction.on_commit(
-                    functools.partial(
-                        run_db_deploy.apply_async,
-                        args=[str(deploy_item.id)],
-                        task_id=task_id,
-                    )
+            if force_rebuild:
+                generation, teardown_error = fence_and_teardown_service_runtime(
+                    service_item,
+                    platform=platform,
                 )
             else:
-                transaction.on_commit(
-                    functools.partial(
-                        start_service.apply_async,
-                        args=[str(deploy_item.id)],
-                        task_id=task_id,
-                    )
+                generation = bump_lifecycle(
+                    service_item.pk,
+                    desired_state="running",
                 )
+
+            service_item.refresh_from_db(fields=["active_revision_id"])
+            if teardown_error is not None:
+                record_force_rebuild_teardown_failure(
+                    service_item.pk,
+                    deploy_item.pk,
+                    expected_generation=generation,
+                    error=teardown_error,
+                )
+            else:
+                task_id = make_uuid4()
+                StateManager.transition_service(
+                    service_item.pk,
+                    SERVICE_STATUS_CHOICES.QUEUED,
+                    update_fields={
+                        "deploy_started": timezone.now(),
+                        "task_id": task_id,
+                        "desired_state": "running",
+                        "lifecycle_generation": generation,
+                    },
+                )
+
+                Deploy.objects.filter(pk=deploy_item.pk).update(
+                    status="pending",
+                    stage="queued",
+                    progress=0,
+                    status_message="Rebuild queued."
+                    if force_rebuild
+                    else "Deployment queued.",
+                    error_message="",
+                    cancel_requested=False,
+                    expected_lifecycle_generation=generation,
+                    expected_active_revision_id=str(service_item.active_revision_id or ""),
+                    worker_recovery_attempts=0,
+                )
+
+                if is_db:
+                    transaction.on_commit(
+                        functools.partial(
+                            run_db_deploy.apply_async,
+                            args=[str(deploy_item.id)],
+                            task_id=task_id,
+                        )
+                    )
+                else:
+                    transaction.on_commit(
+                        functools.partial(
+                            start_service.apply_async,
+                            args=[str(deploy_item.id)],
+                            task_id=task_id,
+                        )
+                    )
 
     except Service.DoesNotExist:
         return Response(
@@ -572,6 +578,37 @@ def admin_start_service_apiview(request):
                 "detail": _(f"Service with this ID:{service_id} not found."),
             },
             status=status.HTTP_404_NOT_FOUND,
+        )
+    except Exception as exc:
+        from deployments.common.exceptions import DeploymentLockError
+
+        if isinstance(exc, DeploymentLockError):
+            return Response(
+                {
+                    "result": "error",
+                    "code": exc.code,
+                    "detail": str(exc.user_message),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        logger.exception("Admin service start failed for %s", service_id)
+        return Response(
+            {"result": "error", "detail": _("Could not queue the service operation.")},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if teardown_error is not None:
+        return Response(
+            {
+                "result": "error",
+                "code": "FORCE_REBUILD_TEARDOWN_FAILED",
+                "detail": _(
+                    "The previous runtime could not be removed safely. "
+                    "The service was fenced and marked for reconciliation; "
+                    "no new deployment was queued."
+                ),
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
     action_word = "Rebuild" if force_rebuild else "Start"
