@@ -1,65 +1,62 @@
-# tickets — detailed API route reference
+# tickets API — detailed endpoint reference
 
-This page is a source-derived route inventory. Path parameters are required by the URL shape. Request fields shown as observed are read by the implementation; endpoint-specific validation remains authoritative in the handler/serializer.
+Root mount: `/api/tickets/`. All current routes require an authenticated active user. A successful authentication is not sufficient: ticket ownership, assigned-staff and department membership checks are applied at the owning endpoint. The detailed app guide is [tickets API](api.md).
 
-## Request flow
+## Customer endpoints
 
-```mermaid
-flowchart LR
-    C[Client] --> Auth[Authentication]
-    Auth --> Perm[Permission / ownership]
-    Perm --> Validate[Serializer / handler validation]
-    Validate --> DB[Durable model state]
-    DB --> Async[Optional Celery / side effect]
-```
-
-## Endpoint matrix
-
-| Route declaration | Handler | Request fields observed in source | Requiredness / notes |
+| Method | Route | Handler | What it does |
 |---|---|---|---|
-| `departments/` | `DepartmentListAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | no path parameter ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `context/` | `MyTicketContextAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | no path parameter ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `<int:pk>/` | `TicketDetailAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | path `pk` required ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `<int:pk>/close/` | `TicketCloseAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | path `pk` required ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `<int:pk>/read/` | `TicketMarkReadAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | path `pk` required ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `<int:pk>/messages/` | `TicketMessageCreateAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | path `pk` required ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `attachments/<int:pk>/download/` | `AttachmentDownloadAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | path `pk` required ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `staff/` | `StaffTicketListAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | no path parameter ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `staff/stats/` | `StaffTicketStatsAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | no path parameter ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `staff/<int:pk>/status/` | `StaffTicketStatusAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | path `pk` required ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `staff/<int:pk>/priority/` | `StaffTicketPriorityAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | path `pk` required ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `staff/<int:pk>/department/` | `StaffTicketAssignDepartmentAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | path `pk` required ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `staff/<int:pk>/assign/` | `StaffTicketAssignAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | path `pk` required ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `staff/<int:pk>/delete/` | `StaffTicketDeleteAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | path `pk` required ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `admin/departments/` | `AdminDepartmentListCreateAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | no path parameter ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `admin/departments/<int:pk>/` | `AdminDepartmentDetailAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | path `pk` required ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `admin/departments/<int:pk>/members/` | `AdminDepartmentMembershipAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | path `pk` required ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `admin/departments/<int:pk>/staff/` | `DepartmentStaffListAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | path `pk` required ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `admin/staff/` | `AdminStaffListAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | no path parameter ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
-| `admin/users/<int:user_id>/memberships/` | `AdminUserMembershipAPIView` | `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` | path `user_id` required ; handler-module inputs include `all`, `body`, `department`, `priority`, `search`, `service_id`, `status`, `assigned_to`, `assigned_to_id`, `created_from`, `created_to`, `has_attachments`, `ordering`, `updated_from`, `is_manager`, `memberships`, `user_id` |
+| GET | `/departments/` | DepartmentListAPIView | Lists active departments used by the new-ticket form. Staff may request the broader list with the supported `all=1` query option. |
+| GET | `/context/` | MyTicketContextAPIView | Returns the caller's owned Services and Deploys so a ticket can optionally reference a workload/deployment. |
+| GET | `/` | MyTicketListCreateAPIView | Lists only the caller's tickets; supports status, priority, department and subject/public-ID search, paginated and ordered by recent activity. |
+| POST | `/` | MyTicketListCreateAPIView | Creates a ticket and its first message; validates department, optional Service/Deploy ownership, rate/open-ticket limits and attachments. |
+| GET | `/<pk>/` | TicketDetailAPIView | Reads one ticket and its messages/attachments after ticket object permission checks. |
+| POST | `/<pk>/close/` | TicketCloseAPIView | Closes an owned/authorized ticket and records closed_at. Repeated close is rejected as already closed. |
+| POST | `/<pk>/read/` | TicketMarkReadAPIView | Marks unread messages from the other party as seen, updates TicketReadState and broadcasts a read event when something changed. |
+| POST | `/<pk>/messages/` | TicketMessageCreateAPIView | Adds a sanitized reply and optional validated attachments; closed tickets reject replies and message rate limits apply. |
+| GET | `/attachments/<pk>/download/` | AttachmentDownloadAPIView | Streams an attachment only after verifying access to its owning ticket. |
 
-## Observed request keys
+## Staff endpoints
 
-| Key | Typical role | Optionality |
-|---|---|---|
-| `all` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `assigned_to` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `assigned_to_id` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `body` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `created_from` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `created_to` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `department` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `has_attachments` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `is_manager` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `memberships` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `ordering` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `priority` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `search` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `service_id` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `status` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `updated_from` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
-| `user_id` | Input consumed by at least one handler in this app API layer. | Conditional/operation-specific; use the handler or serializer as the final requiredness contract. |
+| Method | Route | Handler | What it does |
+|---|---|---|---|
+| GET | `/staff/` | StaffTicketListAPIView | Lists tickets visible to staff under department/assignment scope; supports advanced filters including status, priority, assigned user, date, Service and attachment state. |
+| GET | `/staff/stats/` | StaffTicketStatsAPIView | Returns staff-scoped counts by lifecycle state, urgency, assignment and department. |
+| POST | `/staff/<pk>/status/` | StaffTicketStatusAPIView | Changes ticket status after staff/object permission and TicketStatusSerializer validation. |
+| POST | `/staff/<pk>/priority/` | StaffTicketPriorityAPIView | Changes ticket priority after staff/object permission and TicketPrioritySerializer validation. |
+| POST | `/staff/<pk>/department/` | StaffTicketAssignDepartmentAPIView | Reassigns a ticket to another department; requires superuser or manager membership in the current department. |
+| POST | `/staff/<pk>/assign/` | StaffTicketAssignAPIView | Assigns or unassigns an active staff member; non-superusers can assign only a member of the ticket's department. |
+| DELETE | `/staff/<pk>/delete/` | StaffTicketDeleteAPIView | Permanently deletes a ticket; requires superuser, department-manager authority or the tickets.delete rule. |
+
+## Department and membership administration
+
+| Method | Route | Handler | What it does / access rule |
+|---|---|---|---|
+| GET | `/admin/departments/` | AdminDepartmentListCreateAPIView | Lists all departments for department managers; other staff see only their assigned departments. Includes staff/open/total ticket counts. |
+| POST | `/admin/departments/` | AdminDepartmentListCreateAPIView | Creates department metadata; requires departments.manage or superuser. |
+| GET | `/admin/departments/<pk>/` | AdminDepartmentDetailAPIView | Reads department metadata and its staff memberships; requires manager/superuser scope. |
+| PUT | `/admin/departments/<pk>/` | AdminDepartmentDetailAPIView | Updates department metadata under departments.manage. |
+| DELETE | `/admin/departments/<pk>/` | AdminDepartmentDetailAPIView | Soft-deactivates the department (`is_active=false`); it is not a hard delete. |
+| POST | `/admin/departments/<pk>/members/` | AdminDepartmentMembershipAPIView | Adds/updates a staff membership and manager flag; superuser only. |
+| DELETE | `/admin/departments/<pk>/members/` | AdminDepartmentMembershipAPIView | Removes the membership identified by user_id; superuser only. |
+| GET | `/admin/departments/<pk>/staff/` | DepartmentStaffListAPIView | Lists active staff assigned to the department for assignment controls; scoped to a member or superuser. |
+| GET | `/admin/staff/` | AdminStaffListAPIView | Lists staff with department memberships and open assignment counts; superuser only. |
+| GET | `/admin/users/<user_id>/memberships/` | AdminUserMembershipAPIView | Reads a user's department memberships and the active department choices; superuser only. |
+| PUT | `/admin/users/<user_id>/memberships/` | AdminUserMembershipAPIView | Replaces the user's department membership set transactionally; superuser only. |
+
+## Important security and side-effect rules
+
+- Ticket.service and Ticket.deploy are optional context only; they do not grant access to those Service or Deploy objects.
+- Ticket content is sanitized HTML; it intentionally differs from Messenger's plain-text message contract.
+- Attachment type, extension, MIME/signature, per-file size and aggregate ticket quota are validated before storage.
+- Read-state updates and new messages may trigger Channels events. They are durable database mutations first; realtime delivery is a projection.
+- Department deletion/deactivation and membership management have separate staff/superuser rules. Do not infer membership permissions from ordinary ticket ownership.
 
 ## Source of truth
 
-The URL declaration, handler implementation and serializer validation are authoritative. This reference deliberately does not invent requiredness when the code makes it conditional on login settings, ownership, resource state or another field.
+Routes: `src/tickets/urls.py`.
+Customer handlers: `src/tickets/api/user_tickets.py`.
+Staff handlers: `src/tickets/api/staff_tickets.py`.
+Admin handlers: `src/tickets/api/admin_tickets.py`.
+Permissions: `src/tickets/permissions.py`.
+Serializers and upload policy: `src/tickets/serializers.py`, `src/tickets/utils.py`.
