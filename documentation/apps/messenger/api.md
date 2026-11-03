@@ -6,21 +6,24 @@ Topic handlers live in `src/messenger/api/topics.py`. For standard groups, GET/P
 
 ## Exact HTTP surface
 
-### Users and profile
+### Users, contacts and profile
 
-| Method | Route |
-|---|---|
-| GET | /api/messenger/users/search/ |
-| GET, POST | /api/messenger/contacts/ |
-| DELETE | /api/messenger/contacts/<int:user_id>/ |
-| GET, POST | /api/messenger/blocks/ |
-| POST | /api/messenger/blocks/<int:user_id>/unblock/ |
-| GET | /api/messenger/users/<int:user_id>/profile/ |
-| GET | /api/messenger/users/by-username/ |
-| GET | /api/messenger/me/photos/ |
-| PATCH | /api/messenger/me/photo-privacy/ |
-| GET, PATCH | /api/messenger/me/bio/ |
-| POST | /api/messenger/me/profile-broadcast/ |
+| Method | Route | What it does |
+|---|---|---|
+| GET | /api/messenger/users/search/ | Searches active users by username; blocked users and the caller are excluded. |
+| GET | /api/messenger/contacts/ | Lists the caller's contacts with pagination and optional username/nickname/name search. |
+| POST | /api/messenger/contacts/ | Adds an active user as a contact, optionally recording a nickname; self-add and blocked relationships are rejected. |
+| DELETE | /api/messenger/contacts/<int:user_id>/ | Removes the caller's contact relationship with that user. |
+| GET | /api/messenger/blocks/ | Lists users blocked by the caller. |
+| POST | /api/messenger/blocks/ | Blocks a user, removes the caller's contact entry for that user and invalidates the caller's Messenger list cache. |
+| POST | /api/messenger/blocks/<int:user_id>/unblock/ | Removes the caller's block for that user. |
+| GET | /api/messenger/users/<int:user_id>/profile/ | Returns an active user's Messenger profile; profile photos are included only when the caller passes the photo-privacy policy. |
+| GET | /api/messenger/users/by-username/ | Resolves an exact username (ignoring an optional leading @) to the same privacy-filtered profile payload without creating a contact. |
+| GET | /api/messenger/me/photos/ | Lists the caller's existing users.Profile images and current Messenger photo-privacy settings; Messenger does not own upload/reorder/delete. |
+| PATCH | /api/messenger/me/photo-privacy/ | Changes the caller's photo-visibility scope and optional allow-list of up to 200 users. |
+| GET | /api/messenger/me/bio/ | Reads the caller's Messenger bio/about text. |
+| PATCH | /api/messenger/me/bio/ | Updates the caller's bio, truncated to 255 characters. |
+| POST | /api/messenger/me/profile-broadcast/ | Broadcasts a profile-update event to the caller's conversations after an external profile/photo/username change. |
 
 ### Conversations and messages
 
@@ -102,16 +105,16 @@ The integration creates Paas Deployer-specific Matrix accounts (localparts deriv
 
 ### Media and calls
 
-| Method | Route |
-|---|---|
-| GET | /api/messenger/conversations/<int:pk>/media/ |
-| POST | /api/messenger/conversations/<int:pk>/cleanup/ |
-| GET | /api/messenger/attachments/<int:pk>/download/ |
-| POST | /api/messenger/attachments/<int:pk>/view-once/ |
-| POST | /api/messenger/conversations/<int:pk>/call/ |
-| GET | /api/messenger/conversations/<int:pk>/call/join/ |
-| GET | /api/messenger/conversations/<int:pk>/call/active/ |
-| POST | /api/messenger/conversations/<int:pk>/call/end/ |
+| Method | Route | What it does |
+|---|---|---|
+| GET | /api/messenger/conversations/<int:pk>/media/ | Lists image/video/audio/voice/file attachments for an active conversation member; supports `kind`, `before_id` and bounded `limit` pagination. |
+| POST | /api/messenger/conversations/<int:pk>/cleanup/ | Destructively clears the entire conversation history for every participant, deletes stored attachment files, resets the caller's read cursor, invalidates caches and broadcasts `messages.cleared`. |
+| GET | /api/messenger/attachments/<int:pk>/download/ | Streams an attachment after checking authentication, active conversation membership and transport mode. View-once media additionally requires an unexpired per-user one-time token/window; purged media returns 410. |
+| POST | /api/messenger/attachments/<int:pk>/view-once/ | Opens a view-once attachment once for the caller, issues a download URL/token valid for 15 seconds and schedules a purge check when all recipients have opened. |
+| POST | /api/messenger/conversations/<int:pk>/call/ | Starts a conversation call with optional `video`/`audio` flags; creates a durable CallSession and call-start system message, and rings peers for 30 seconds. Only one active/ringing call may exist per conversation. |
+| GET | /api/messenger/conversations/<int:pk>/call/join/ | Joins the selected/current ringing or active call (optional `call_id` query parameter), transitions a ringing call to active, registers the participant and returns Jitsi room configuration. |
+| GET | /api/messenger/conversations/<int:pk>/call/active/ | Reads the current ringing/active call and caller participant state; self-heals ringing sessions older than the 30-second window. |
+| POST | /api/messenger/conversations/<int:pk>/call/end/ | Ends/declines/leaves a call using optional `call_id` and `reason`; group participants can leave without ending the call for everyone else. |
 
 ## Durable/realtime contract
 
