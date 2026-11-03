@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
+from collections.abc import Mapping
 from typing import Any, Iterable
 
 from deployments.runtime.execution_contract import RuntimeExecutionContract
@@ -91,7 +92,7 @@ class ServiceRuntimeGraph:
     processes: tuple[RuntimeProcess, ...] = ()
     endpoints: tuple[RuntimeEndpoint, ...] = ()
     volumes: tuple[dict[str, Any], ...] = ()
-    networks: tuple[str, ...] = ()
+    networks: tuple[str | dict[str, Any], ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
     execution_contracts: dict[str, RuntimeExecutionContract] = field(default_factory=dict)
 
