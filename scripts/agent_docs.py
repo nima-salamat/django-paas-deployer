@@ -204,6 +204,8 @@ def route_inventory() -> list[dict]:
         module = ".".join(path.relative_to(SRC).with_suffix("").parts)
         mounts = prefixes.get(module, [""])
         app = source_app(path)
+        if app == "config":
+            app = ""
         seen = set()
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
