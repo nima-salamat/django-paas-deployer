@@ -55,6 +55,29 @@ Attachment delivery is access-controlled before streaming. View-once media has a
 ### Calls
 Call state is conversation-scoped. Active-call and join operations read current state; ending a call is a mutation guarded by call/session authorization.
 
+## Matrix device logout and session expiry
+
+### Explicit device logout
+
+`POST /api/messenger/secure/device-session/logout/`
+
+Headers:
+- `X-Matrix-Access-Token`: the current device-scoped Matrix access token.
+- `X-Matrix-Device-ID`: the stable ID for that browser installation.
+
+This self-service endpoint deliberately uses the Matrix token itself as proof of device ownership instead of requiring a live Django JWT. A user can therefore sign out of Messenger after the Django session has expired. The handler resolves the token with Matrix `whoami`, maps the returned Matrix user/device to `MatrixIdentity` and a non-revoked `MatrixDevice`, then calls Matrix `/logout`.
+
+A successful request stores `MatrixDevice.logged_out_at` but does not set `revoked_at`. This records an expected removal of the homeserver-side device while preserving the Deployer-side device identity for a later login. The response contains `data.device_id` and `data.logged_out=true`.
+
+### Logout versus expiry
+
+- A user-initiated application logout first logs out the Matrix device, then revokes the current Django session, and finally removes both browser bearer tokens.
+- Django session expiry is not a Matrix device revocation. The browser stops the running Matrix client but preserves its Matrix session, stable device ID and local IndexedDB crypto store. After the next Django login, the saved Matrix session is validated and reused.
+- A successful subsequent Matrix login clears `logged_out_at`. An explicit device revoke sets `revoked_at`, which remains permanent and prevents reuse of that device ID.
+- The Matrix identity password remains encrypted at rest on the backend; it is not a browser credential and is not erased by an ordinary logout because it is needed to create a fresh Matrix device session later.
+
+The browser's local encryption keys are deliberately not deleted by application logout. Clearing those keys is a separate destructive recovery/device-removal action and can make historical encrypted messages unreadable.
+
 ## Realtime and durability
 
 ```mermaid
