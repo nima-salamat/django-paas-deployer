@@ -7,7 +7,7 @@ Source of truth: `src/deploy/models.py`. Django/Django-contrib inherited fields 
 ## Deploy
 
 **Bases:** `BaseModel`  
-**Declared fields:** 45
+**Declared fields:** 48
 
 | Field | Django type | DB nullable | Blank | Default | Constraints / relation | Purpose / contract |
 |---|---|---:|---:|---|---|---|
@@ -48,6 +48,9 @@ Source of truth: `src/deploy/models.py`. Django/Django-contrib inherited fields 
 | `cancel_requested` | `BooleanField` | no | no | `False` | DB non-null, blank not allowed | Stores the cancel requested value required by Deploy for its BooleanField contract. |
 | `execution_task_id` | `CharField` | no | yes | `""` | DB non-null, blank allowed, indexed | Stores the execution task id value required by Deploy for its CharField contract. |
 | `worker_heartbeat_at` | `DateTimeField` | yes | yes | `—` | DB nullable, blank allowed, indexed | Stores the worker heartbeat at value required by Deploy for its DateTimeField contract. |
+| `expected_lifecycle_generation` | `PositiveIntegerField` | yes | yes | `—` | nullable, blank allowed | Lifecycle generation captured when the deployment intent was queued; stale workers must not adopt later intent. |
+| `expected_active_revision_id` | `CharField` | no | yes | `""` | blank allowed | Active service revision observed when the deployment intent was queued; supports immutable execution fencing. |
+| `worker_recovery_attempts` | `PositiveSmallIntegerField` | no | no | `0` | bounded retry counter | Counts limited same-task recoveries after a Celery worker process is lost. |
 | `previous_deploy` | `ForeignKey` | yes | yes | `—` | DB nullable, blank allowed, on_delete; related_name=replacement_deployments; on_delete=SET_NULL | Associates the record with a deployment attempt/provenance record. |
 | `operation` | `CharField` | no | yes | `""` | DB non-null, blank allowed, indexed | Stores the operation value required by Deploy for its CharField contract. |
 | `operation_started_at` | `DateTimeField` | yes | yes | `—` | DB nullable, blank allowed | Stores the operation started at value required by Deploy for its DateTimeField contract. |
@@ -94,6 +97,9 @@ Source of truth: `src/deploy/models.py`. Django/Django-contrib inherited fields 
 - `cancel_requested`: `BooleanField` with DB non-null, blank not allowed. The model declaration is authoritative for validation and persistence behavior.
 - `execution_task_id`: `CharField` with DB non-null, blank allowed, indexed. The model declaration is authoritative for validation and persistence behavior.
 - `worker_heartbeat_at`: `DateTimeField` with DB nullable, blank allowed, indexed. The model declaration is authoritative for validation and persistence behavior.
+- `expected_lifecycle_generation`: nullable `PositiveIntegerField` fencing value captured when the deployment intent is queued.
+- `expected_active_revision_id`: blankable `CharField` containing the active revision observed at enqueue time.
+- `worker_recovery_attempts`: `PositiveSmallIntegerField` counter bounded by the worker-recovery policy.
 - `previous_deploy`: `ForeignKey` with DB nullable, blank allowed, on_delete. The model declaration is authoritative for validation and persistence behavior.
 - `operation`: `CharField` with DB non-null, blank allowed, indexed. The model declaration is authoritative for validation and persistence behavior.
 - `operation_started_at`: `DateTimeField` with DB nullable, blank allowed. The model declaration is authoritative for validation and persistence behavior.
