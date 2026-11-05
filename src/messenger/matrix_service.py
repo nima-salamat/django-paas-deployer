@@ -387,7 +387,7 @@ def revoke_device(user, device_id: str) -> None:
     device.save(update_fields=("revoked_at", "logged_out_at", "last_seen_at"))
 
 
-def logout_matrix_device(device_id: str, access_token: str) -> None:
+def logout_matrix_device(device_id: str, access_token: str, *, verified_session: dict | None = None) -> None:
     """Log out a Matrix token without permanently revoking its app device ID.
 
     The Matrix token itself authenticates this self-service endpoint. That is
@@ -401,7 +401,7 @@ def logout_matrix_device(device_id: str, access_token: str) -> None:
     if not isinstance(access_token, str) or not access_token or len(access_token) > 4096:
         raise MatrixServiceError("A valid Matrix device session is required.", 401)
 
-    session = whoami(access_token)
+    session = verified_session or whoami(access_token)
     identity = MatrixIdentity.objects.select_related("user").filter(
         matrix_user_id=session["user_id"],
     ).first()
