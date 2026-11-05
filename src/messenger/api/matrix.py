@@ -6,7 +6,7 @@ import logging
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 from auth_users.authentication import SessionJWTAuthentication as JWTAuthentication
 
@@ -109,10 +109,14 @@ class MatrixDeviceSessionAPIView(APIView):
 
 
 class MatrixDeviceLogoutAPIView(APIView):
-    """Invalidate one Matrix access token while preserving its app device identity."""
+    """Invalidate a Matrix token using that token as proof of device ownership.
 
-    authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    This endpoint intentionally does not require a Django JWT: explicit logout
+    must still be able to invalidate Matrix credentials after Django expires.
+    """
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
 
     def post(self, request):
         if not matrix_is_configured():
@@ -122,11 +126,11 @@ class MatrixDeviceLogoutAPIView(APIView):
         if not access_token or not device_id:
             return err("A Matrix device session is required.", status.HTTP_401_UNAUTHORIZED)
         try:
-            logout_matrix_device(request.user, device_id, access_token)
+            logout_matrix_device(device_id, access_token)
         except MatrixServiceError as exc:
             return _service_error_response(exc)
         except Exception:
-            logger.exception("Unexpected Matrix device logout error for django_user_id=%s", request.user.pk)
+            logger.exception("Unexpected Matrix device logout error")
             return err("Could not log out the Matrix device session.", status.HTTP_503_SERVICE_UNAVAILABLE)
         return ok("Matrix device session logged out", data={"device_id": device_id, "logged_out": True})
 
