@@ -6,7 +6,7 @@ import logging
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from rest_framework import status
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.views import APIView
 from auth_users.authentication import SessionJWTAuthentication as JWTAuthentication
 
@@ -22,6 +22,7 @@ from ..matrix_service import (
     verify_device_session,
     list_matrix_devices,
     verify_encrypted_room_binding,
+    whoami,
 )
 from ..models import Contact, Conversation, ConversationParticipant, MatrixDevice, MatrixIdentity
 from ..serializers import ConversationDetailSerializer, build_conversation_list_context
@@ -108,6 +109,35 @@ class MatrixDeviceSessionAPIView(APIView):
         return ok("Matrix device session ready", data=session, http_status=status.HTTP_201_CREATED)
 
 
+class HasValidMatrixDeviceLogoutToken(BasePermission):
+    """Require proof of the exact Matrix device being signed out.
+
+    This is intentionally independent of Django JWT authentication so the
+    device can be invalidated after the app session expires. Unlike AllowAny,
+    it rejects callers without a live Matrix bearer token bound to a registered
+    Deployer Matrix identity and the requested device ID.
+    """
+
+    def has_permission(self, request, view):
+        access_token = _matrix_token(request)
+        device_id = (request.headers.get("X-Matrix-Device-ID") or "").strip()
+        if not access_token or not device_id:
+            return False
+        try:
+            session = whoami(access_token)
+        except MatrixServiceError:
+            return False
+        return (
+            session.get("device_id") == device_id
+            and MatrixIdentity.objects.filter(matrix_user_id=session.get("user_id")).exists()
+            and MatrixDevice.objects.filter(
+                device_id=device_id,
+                revoked_at__isnull=True,
+                user__messenger_matrix_identity__matrix_user_id=session.get("user_id"),
+            ).exists()
+        )
+
+
 class MatrixDeviceLogoutAPIView(APIView):
     """Invalidate a Matrix token using that token as proof of device ownership.
 
@@ -116,7 +146,7 @@ class MatrixDeviceLogoutAPIView(APIView):
     """
 
     authentication_classes = []
-    permission_classes = [AllowAny]
+    permission_classes = [HasValidMatrixDeviceLogoutToken]
 
     def post(self, request):
         if not matrix_is_configured():
