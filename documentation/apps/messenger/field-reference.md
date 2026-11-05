@@ -158,7 +158,7 @@ Source-derived from `src/messenger/models.py` on `master`. This supplements [mod
 ## MatrixDevice
 
 **Bases:** `models.Model`  
-**Declared fields:** 6
+**Declared fields:** 7
 
 | Field | Type | DB NULL | Blank | Default | Constraints | Purpose / why it exists |
 |---|---|---:|---:|---|---|---|
@@ -167,7 +167,8 @@ Source-derived from `src/messenger/models.py` on `master`. This supplements [mod
 | `display_name` | `CharField` | no | yes | `""` | blank allowed | Human-readable device label. |
 | `last_seen_at` | `DateTimeField` | no | no | — | auto_now | Last successful app login through this Matrix device. |
 | `created_at` | `DateTimeField` | no | no | — | auto_now_add | Device creation timestamp. |
-| `revoked_at` | `DateTimeField` | yes | yes | — | nullable, indexed | Local record of server-side Matrix device revocation. |
+| `revoked_at` | `DateTimeField` | yes | yes | — | nullable, indexed | Permanent server-side Matrix device revocation; a revoked ID cannot be reused. |
+| `logged_out_at` | `DateTimeField` | yes | yes | — | nullable, indexed | Records a user-initiated Matrix logout separately from permanent revocation. The app-level device ID remains reusable, and a successful subsequent login clears this timestamp. |
 
 ## ConversationParticipant
 
