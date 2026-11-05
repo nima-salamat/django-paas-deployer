@@ -1,6 +1,6 @@
 # messenger API
 
-Canonical mount: /api/messenger/. Routes and methods below are derived from src/messenger/urls.py and the registered APIView classes. Authentication is SessionJWTAuthentication + IsAuthenticated; authorization is participant/role/viewer scoped.
+Canonical mount: /api/messenger/. Routes and methods below are derived from src/messenger/urls.py and the registered APIView classes. Authentication is SessionJWTAuthentication + IsAuthenticated; authorization is participant/role/viewer scoped. The Matrix device logout route is the exception: it uses the supplied Matrix device token as proof of ownership so explicit logout remains possible after a Django session expires.
 
 Topic handlers live in `src/messenger/api/topics.py`. For standard groups, GET/POST operates on child topic conversations while preserving the existing root timeline as General. The endpoint rejects legacy topic operations for `matrix_e2ee` records until they are backed by actual Matrix rooms.
 
@@ -78,6 +78,7 @@ These endpoints are reserved for the opt-in E2EE path; they do not change standa
 | Method | Route | Important contract |
 |---|---|---|
 | POST | /api/messenger/secure/device-session/ | Create a normal Matrix login for a newly generated device ID; the Synapse admin credential stays on the backend. |
+| POST | /api/messenger/secure/device-session/logout/ | Validate the Matrix token with `whoami`, log out that device on Synapse and mark `logged_out_at`; Matrix-token-authenticated self-service, intentionally works after Django JWT expiry and does not permanently revoke the app device ID. |
 | GET | /api/messenger/secure/device-session/ | Validate that the supplied Matrix access token and device belong to the currently authenticated Django account. |
 | POST | /api/messenger/secure/identities/ | Resolve active Messenger contacts/authorized conversation participants to server-managed Matrix user IDs. |
 | GET | /api/messenger/secure/devices/ | List Matrix device records associated with the current Django user. |
