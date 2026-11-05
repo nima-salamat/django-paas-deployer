@@ -267,6 +267,10 @@ class MatrixDevice(models.Model):
     last_seen_at = models.DateTimeField(auto_now=True)
     created_at = models.DateTimeField(auto_now_add=True)
     revoked_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    # A normal browser logout removes the remote Matrix access token/device,
+    # but keeps this app-level device identity eligible for the next login.
+    # Explicit device revocation remains represented by revoked_at.
+    logged_out_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
         constraints = [
