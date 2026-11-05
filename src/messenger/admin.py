@@ -366,3 +366,27 @@ class ProfilePhotoAllowedAdmin(admin.ModelAdmin):
     search_fields = ("user__username", "user__email", "privacy__user__username")
     raw_id_fields = ("privacy", "user")
     readonly_fields = ("created_at",)
+
+
+# Matrix account/device inventory is operational security metadata. Expose it
+# for inspection only; never allow hand-editing tokens, key state or revocation.
+from .models import MatrixIdentity, MatrixDevice
+
+
+@admin.register(MatrixIdentity)
+class MatrixIdentityAdmin(AuditReadOnlyAdmin):
+    list_display = ("id", "user", "matrix_user_id", "created_at", "updated_at")
+    search_fields = ("matrix_user_id", "user__username", "user__email")
+    raw_id_fields = ("user",)
+    exclude = ("encrypted_password",)
+
+
+@admin.register(MatrixDevice)
+class MatrixDeviceAdmin(AuditReadOnlyAdmin):
+    list_display = (
+        "id", "user", "device_id", "display_name",
+        "last_seen_at", "logged_out_at", "revoked_at",
+    )
+    list_filter = ("logged_out_at", "revoked_at")
+    search_fields = ("device_id", "display_name", "user__username")
+    raw_id_fields = ("user",)
