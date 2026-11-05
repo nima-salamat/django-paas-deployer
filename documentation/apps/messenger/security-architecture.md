@@ -10,6 +10,16 @@ The secure UI supports encrypted text and client-side encrypted Matrix media (im
 
 The security feature is feasible, but it must be implemented as a protocol integration—not as a home-grown encryption wrapper around `Message.body`.
 
+## Device logout, expiry and revocation
+
+A manual application logout and a Django token expiry are different lifecycle events:
+
+1. **Explicit user logout** asks the backend to invalidate the current Matrix access token using the device token as proof of ownership. The backend records `logged_out_at` separately from permanent `revoked_at`, then the frontend clears the saved Matrix bearer token and Django access/refresh tokens.
+2. **Django session expiry** stops the in-memory Matrix client and clears its runtime secret cache, but preserves the saved Matrix session, stable browser-installation ID and IndexedDB crypto store. The next successful Django login validates the Matrix token and resumes the same device.
+3. **Permanent device revocation** remains a distinct operation. It sets `revoked_at`, deletes the homeserver device through the administrative device-management path, and forces the browser to establish a new device rather than reusing the revoked ID.
+
+The local Matrix crypto store is not deleted on ordinary logout: it may contain the only usable copy of historical room keys. Likewise, `MatrixIdentity.encrypted_password` remains a backend-only Fernet-encrypted credential so the same Matrix identity can issue a fresh device-bound login after the user's next Django login. Neither is equivalent to a current browser bearer token.
+
 ## Requirements
 
 - The server must not receive readable message bodies, replies, attachment contents, or media encryption keys for secure conversations.
