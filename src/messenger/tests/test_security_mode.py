@@ -177,6 +177,7 @@ class MessengerSecurityModeTests(TestCase):
                 ],
             ) as matrix_request_mock,
         ):
+            self.client.force_authenticate(user=None)
             response = self.client.post(
                 "/api/messenger/secure/device-session/logout/",
                 {},
