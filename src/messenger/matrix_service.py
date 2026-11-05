@@ -275,7 +275,8 @@ def create_device_session(user, device_id: str, display_name: str = "") -> dict:
         logger.error("Matrix login response did not match expected user/device (django_user_id=%s)", user.pk)
         raise MatrixServiceError("Matrix did not create the expected device session.")
     device.last_seen_at = timezone.now()
-    device.save(update_fields=("last_seen_at",))
+    device.logged_out_at = None
+    device.save(update_fields=("last_seen_at", "logged_out_at"))
     _, client_base_url, _, _, _ = _config()
     return {
         "homeserver_url": client_base_url,
@@ -345,7 +346,10 @@ def list_matrix_devices(user) -> list[MatrixDevice]:
     now = timezone.now()
     for device in devices:
         remote = remote_by_id.get(device.device_id)
-        if device.revoked_at is None and remote is None:
+        if device.revoked_at is None and remote is None and device.logged_out_at is None:
+            # A normal logout intentionally removes the remote Matrix device.
+            # Keep its app-level identity reusable; a later login with this
+            # same ID recreates the remote device and preserves local crypto state.
             device.revoked_at = now
             device.save(update_fields=("revoked_at", "last_seen_at"))
         if remote is not None:
@@ -379,7 +383,65 @@ def revoke_device(user, device_id: str) -> None:
         json_body={},
     )
     device.revoked_at = timezone.now()
-    device.save(update_fields=("revoked_at", "last_seen_at"))
+    device.logged_out_at = None
+    device.save(update_fields=("revoked_at", "logged_out_at", "last_seen_at"))
+
+
+def logout_matrix_device(user, device_id: str, access_token: str) -> None:
+    """Log out one Matrix token without permanently revoking its app device ID.
+
+    Matrix's /logout endpoint removes the homeserver-side device and its
+    published device keys. Record the expected logout first so inventory
+    reconciliation does not mistake that deliberate removal for revocation.
+    On the next login, the same device ID is recreated and this marker is
+    cleared; the browser's local IndexedDB crypto store remains available.
+    """
+    if not isinstance(device_id, str) or not DEVICE_ID_RE.fullmatch(device_id):
+        raise MatrixServiceError("Device ID is invalid.", 400)
+    if not isinstance(access_token, str) or not access_token or len(access_token) > 4096:
+        raise MatrixServiceError("A valid Matrix device session is required.", 401)
+
+    device = MatrixDevice.objects.filter(
+        user=user,
+        device_id=device_id,
+        revoked_at__isnull=True,
+    ).first()
+    if device is None:
+        raise MatrixServiceError("Matrix device not found or permanently revoked.", 404)
+
+    identity = MatrixIdentity.objects.filter(user=user).first()
+    if identity is None:
+        raise MatrixServiceError("This account has no provisioned Matrix identity.", 403)
+
+    try:
+        session = whoami(access_token)
+    except MatrixServiceError as exc:
+        if exc.status_code == 401:
+            # The token is already unusable. The authenticated Django caller
+            # can safely mark only their own registered device as signed out.
+            device.logged_out_at = timezone.now()
+            device.save(update_fields=("logged_out_at",))
+            return
+        raise
+
+    if session["user_id"] != identity.matrix_user_id or session["device_id"] != device.device_id:
+        raise MatrixServiceError("Matrix session belongs to a different account or device.", 403)
+
+    # Persist intent before calling Synapse. If the response is lost after the
+    # server processed the logout, inventory still recognizes it as expected.
+    device.logged_out_at = timezone.now()
+    device.save(update_fields=("logged_out_at",))
+    try:
+        matrix_request(
+            "POST",
+            "/_matrix/client/v3/logout",
+            access_token=access_token,
+        )
+    except MatrixServiceError as exc:
+        if exc.status_code == 401:
+            # A concurrent logout/revocation already invalidated the token.
+            return
+        raise
 
 
 def encrypted_room_state(access_token: str, room_id: str) -> dict:
