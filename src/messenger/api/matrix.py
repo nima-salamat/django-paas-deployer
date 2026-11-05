@@ -14,6 +14,7 @@ from ..matrix_service import (
     MatrixServiceError,
     ROOM_ID_RE,
     create_device_session,
+    logout_matrix_device,
     ensure_matrix_identity,
     matrix_is_configured,
     matrix_request,
@@ -105,6 +106,29 @@ class MatrixDeviceSessionAPIView(APIView):
             logger.exception("Unexpected Matrix device-session error for django_user_id=%s", request.user.pk)
             return err("Could not start a secure-chat device session.", status.HTTP_503_SERVICE_UNAVAILABLE)
         return ok("Matrix device session ready", data=session, http_status=status.HTTP_201_CREATED)
+
+
+class MatrixDeviceLogoutAPIView(APIView):
+    """Invalidate one Matrix access token while preserving its app device identity."""
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not matrix_is_configured():
+            return err("Secure chat is not configured on this deployment.", status.HTTP_503_SERVICE_UNAVAILABLE)
+        access_token = _matrix_token(request)
+        device_id = (request.headers.get("X-Matrix-Device-ID") or "").strip()
+        if not access_token or not device_id:
+            return err("A Matrix device session is required.", status.HTTP_401_UNAUTHORIZED)
+        try:
+            logout_matrix_device(request.user, device_id, access_token)
+        except MatrixServiceError as exc:
+            return _service_error_response(exc)
+        except Exception:
+            logger.exception("Unexpected Matrix device logout error for django_user_id=%s", request.user.pk)
+            return err("Could not log out the Matrix device session.", status.HTTP_503_SERVICE_UNAVAILABLE)
+        return ok("Matrix device session logged out", data={"device_id": device_id, "logged_out": True})
 
 
 class MatrixIdentityResolveAPIView(APIView):
