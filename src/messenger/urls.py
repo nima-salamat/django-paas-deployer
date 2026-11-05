@@ -4,6 +4,7 @@ from .api.events import ConversationEventSyncAPIView
 from .api.topics import ConversationTopicsAPIView
 from .api.matrix import (
     MatrixDeviceSessionAPIView,
+    MatrixDeviceLogoutAPIView,
     MatrixIdentityResolveAPIView,
     MatrixDeviceListAPIView,
     MatrixDeviceRevokeAPIView,
@@ -12,6 +13,7 @@ from .api.matrix import (
 
 urlpatterns = [
     path("secure/device-session/", MatrixDeviceSessionAPIView.as_view()),
+    path("secure/device-session/logout/", MatrixDeviceLogoutAPIView.as_view()),
     path("secure/identities/", MatrixIdentityResolveAPIView.as_view()),
     path("secure/devices/", MatrixDeviceListAPIView.as_view()),
     path("secure/devices/<str:device_id>/revoke/", MatrixDeviceRevokeAPIView.as_view()),
