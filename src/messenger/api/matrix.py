@@ -205,6 +205,7 @@ class MatrixDeviceListAPIView(APIView):
                 ),
                 "last_seen_known": bool(getattr(device, "matrix_last_seen_at", None)),
                 "revoked_at": device.revoked_at.isoformat() if device.revoked_at else None,
+                "logged_out_at": device.logged_out_at.isoformat() if device.logged_out_at else None,
                 "is_current": device.device_id == current_device_id,
             }
             for device in devices
