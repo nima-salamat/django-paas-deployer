@@ -121,6 +121,12 @@ class MessengerSecurityModeTests(TestCase):
             display_name="Revoked browser",
             revoked_at=timezone.now(),
         )
+        deliberately_logged_out = MatrixDevice.objects.create(
+            user=self.owner,
+            device_id="PDLOGGEDOUT1234",
+            display_name="Signed out browser",
+            logged_out_at=timezone.now(),
+        )
 
         with patch(
             "messenger.matrix_service.matrix_request",
@@ -141,11 +147,95 @@ class MessengerSecurityModeTests(TestCase):
         self.assertIsNotNone(by_id[active.device_id].matrix_last_seen_at)
         self.assertIsNotNone(by_id[stale.device_id].revoked_at)
         self.assertIsNotNone(by_id[already_revoked.device_id].revoked_at)
+        self.assertIsNone(by_id[deliberately_logged_out.device_id].revoked_at)
+        self.assertIsNotNone(by_id[deliberately_logged_out.device_id].logged_out_at)
         matrix_request_mock.assert_called_once_with(
             "GET",
             f"/_synapse/admin/v2/users/{identity.matrix_user_id}/devices",
             admin=True,
         )
+
+    def test_explicit_matrix_logout_keeps_the_device_reusable_but_invalidates_its_token(self):
+        identity = MatrixIdentity.objects.create(
+            user=self.owner,
+            matrix_user_id=f"@pd_{self.owner.pk}:matrix.example.test",
+            encrypted_password=Fernet.generate_key().decode("ascii"),
+        )
+        device = MatrixDevice.objects.create(
+            user=self.owner,
+            device_id="PDLOGOUT1234",
+            display_name="Current browser",
+        )
+
+        with (
+            patch("messenger.api.matrix.matrix_is_configured", return_value=True),
+            patch(
+                "messenger.matrix_service.matrix_request",
+                side_effect=[
+                    {"user_id": identity.matrix_user_id, "device_id": device.device_id},
+                    {},
+                ],
+            ) as matrix_request_mock,
+        ):
+            response = self.client.post(
+                "/api/messenger/secure/device-session/logout/",
+                {},
+                format="json",
+                HTTP_X_MATRIX_ACCESS_TOKEN="test-matrix-device-token",
+                HTTP_X_MATRIX_DEVICE_ID=device.device_id,
+            )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        device.refresh_from_db()
+        self.assertIsNone(device.revoked_at)
+        self.assertIsNotNone(device.logged_out_at)
+        self.assertEqual(matrix_request_mock.call_args_list[0].args[:2], ("GET", "/_matrix/client/v3/account/whoami"))
+        self.assertEqual(matrix_request_mock.call_args_list[1].args[:2], ("POST", "/_matrix/client/v3/logout"))
+
+    def test_logged_out_matrix_device_can_login_again_with_the_same_device_id(self):
+        from messenger.matrix_service import create_device_session
+
+        identity = MatrixIdentity.objects.create(
+            user=self.owner,
+            matrix_user_id=f"@pd_{self.owner.pk}:matrix.example.test",
+            encrypted_password=Fernet.generate_key().decode("ascii"),
+        )
+        device = MatrixDevice.objects.create(
+            user=self.owner,
+            device_id="PDRELOGIN1234",
+            display_name="Browser",
+            logged_out_at=timezone.now(),
+        )
+        login_payload = {
+            "access_token": "new-matrix-access-token",
+            "user_id": identity.matrix_user_id,
+            "device_id": device.device_id,
+        }
+
+        with (
+            patch(
+                "messenger.matrix_service._config",
+                return_value=(
+                    "https://matrix.example.test",
+                    "https://matrix.example.test",
+                    "matrix.example.test",
+                    "admin-token",
+                    None,
+                ),
+            ),
+            patch(
+                "messenger.matrix_service.ensure_matrix_identity",
+                return_value=(identity, "matrix-password"),
+            ),
+            patch("messenger.matrix_service.matrix_request", return_value=login_payload),
+        ):
+            session = create_device_session(self.owner, device.device_id, "Browser")
+
+        self.assertEqual(session["device_id"], device.device_id)
+        self.assertEqual(session["access_token"], "new-matrix-access-token")
+        device.refresh_from_db()
+        self.assertIsNone(device.revoked_at)
+        self.assertIsNone(device.logged_out_at)
 
     def test_new_conversations_default_to_standard_mode(self):
         conversation = Conversation.objects.create(
