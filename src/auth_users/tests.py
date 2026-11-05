@@ -19,8 +19,9 @@ class ExistingAccountReauthenticationTests(TestCase):
 
     def test_reauthentication_never_creates_an_account_when_identifier_is_not_found(self):
         from unittest.mock import patch
-        from users.models import User
+        from django.contrib.auth import get_user_model
 
+        User = get_user_model()
         before = User.objects.count()
         with patch("auth_users.api.auth_flow.can_create_user") as can_create:
             response = self.client.post(
