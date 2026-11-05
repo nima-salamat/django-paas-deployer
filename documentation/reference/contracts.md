@@ -238,6 +238,7 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `messenger` | `src/messenger/urls.py` | explicit | `conversations/<int:pk>/topics/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `conversations/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `secure/device-session/` | [app API docs](../apps/messenger/api-reference.md) |
+| `messenger` | `src/messenger/urls.py` | explicit | `secure/device-session/logout/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `secure/identities/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `secure/devices/` | [app API docs](../apps/messenger/api-reference.md) |
 | `messenger` | `src/messenger/urls.py` | explicit | `secure/devices/<str:device_id>/revoke/` | [app API docs](../apps/messenger/api-reference.md) |
@@ -896,7 +897,10 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `deploy` | `src/deploy/models.py` | `Deploy` | `updated_file_at` | `DateTimeField` | [field reference](../apps/deploy/field-reference.md#deploy) |
 | `deploy` | `src/deploy/models.py` | `Deploy` | `version` | `DecimalField` | [field reference](../apps/deploy/field-reference.md#deploy) |
 | `deploy` | `src/deploy/models.py` | `Deploy` | `volume_status` | `CharField` | [field reference](../apps/deploy/field-reference.md#deploy) |
+| `deploy` | `src/deploy/models.py` | `Deploy` | `expected_active_revision_id` | `CharField` | [field reference](../apps/deploy/field-reference.md#deploy) |
+| `deploy` | `src/deploy/models.py` | `Deploy` | `expected_lifecycle_generation` | `PositiveIntegerField` | [field reference](../apps/deploy/field-reference.md#deploy) |
 | `deploy` | `src/deploy/models.py` | `Deploy` | `worker_heartbeat_at` | `DateTimeField` | [field reference](../apps/deploy/field-reference.md#deploy) |
+| `deploy` | `src/deploy/models.py` | `Deploy` | `worker_recovery_attempts` | `PositiveSmallIntegerField` | [field reference](../apps/deploy/field-reference.md#deploy) |
 | `deploy` | `src/deploy/models.py` | `Deploy` | `zip_file` | `FileField` | [field reference](../apps/deploy/field-reference.md#deploy) |
 | `deploy` | `src/deploy/models.py` | `DeploymentEventOutbox` | `attempts` | `PositiveIntegerField` | [field reference](../apps/deploy/field-reference.md#deploymenteventoutbox) |
 | `deploy` | `src/deploy/models.py` | `DeploymentEventOutbox` | `deployment` | `ForeignKey` | [field reference](../apps/deploy/field-reference.md#deploymenteventoutbox) |
@@ -1100,6 +1104,7 @@ Source code is authoritative. App-level API/model references explain behavior; t
 | `messenger` | `src/messenger/models.py` | `MatrixDevice` | `last_seen_at` | `DateTimeField` | [field reference](../apps/messenger/field-reference.md#matrixdevice) |
 | `messenger` | `src/messenger/models.py` | `MatrixDevice` | `created_at` | `DateTimeField` | [field reference](../apps/messenger/field-reference.md#matrixdevice) |
 | `messenger` | `src/messenger/models.py` | `MatrixDevice` | `revoked_at` | `DateTimeField` | [field reference](../apps/messenger/field-reference.md#matrixdevice) |
+| `messenger` | `src/messenger/models.py` | `MatrixDevice` | `logged_out_at` | `DateTimeField` | [field reference](../apps/messenger/field-reference.md#matrixdevice) |
 | `messenger` | `src/messenger/models.py` | `Conversation` | `security_mode` | `CharField` | [field reference](../apps/messenger/field-reference.md#conversation) |
 | `messenger` | `src/messenger/models.py` | `Conversation` | `is_forum` | `BooleanField` | [field reference](../apps/messenger/field-reference.md#conversation) |
 | `messenger` | `src/messenger/models.py` | `Conversation` | `parent_conversation` | `ForeignKey` | [field reference](../apps/messenger/field-reference.md#conversation) |
