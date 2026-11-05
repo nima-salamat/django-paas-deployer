@@ -45,8 +45,11 @@ At least one allowed identifier is required; accepted identifiers depend on Logi
 | `invite` | Conditional | May be required for new-user signup when invite policy requires it. |
 | `invite_token` | Conditional | Compatibility alias for `invite`. |
 | `password` | Conditional | May be accepted during account creation when password-on-signup is configured. |
+| `existing_account_only` | No | When `true`, this request is a reauthentication attempt for an existing user. If lookup fails, the endpoint returns 401 and never invokes signup, regardless of `allow_auto_signup` or invite policy. |
 
 The server resolves the user using enabled identifier rules. For a new user, signup is allowed only when current settings and invite policy permit it.
+
+An expired-session popup sends `existing_account_only=true`. This is a hard server-side guard—not a UI hint—and it prevents typoed or stale remembered identifiers from creating a second account. The popup uses the same current `LoginSettings` contract and continues through the configured OTP/password/set-password stages.
 
 ## Validate OTP
 
