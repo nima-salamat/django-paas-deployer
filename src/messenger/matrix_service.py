@@ -387,48 +387,39 @@ def revoke_device(user, device_id: str) -> None:
     device.save(update_fields=("revoked_at", "logged_out_at", "last_seen_at"))
 
 
-def logout_matrix_device(user, device_id: str, access_token: str) -> None:
-    """Log out one Matrix token without permanently revoking its app device ID.
+def logout_matrix_device(device_id: str, access_token: str) -> None:
+    """Log out a Matrix token without permanently revoking its app device ID.
 
-    Matrix's /logout endpoint removes the homeserver-side device and its
-    published device keys. Record the expected logout first so inventory
-    reconciliation does not mistake that deliberate removal for revocation.
-    On the next login, the same device ID is recreated and this marker is
-    cleared; the browser's local IndexedDB crypto store remains available.
+    The Matrix token itself authenticates this self-service endpoint. That is
+    intentional: a user may explicitly sign out after their Django session has
+    already expired, and should still be able to invalidate the independent
+    Matrix bearer token. A valid whoami response maps the token back to exactly
+    one provisioned Django account and one registered Matrix device.
     """
     if not isinstance(device_id, str) or not DEVICE_ID_RE.fullmatch(device_id):
         raise MatrixServiceError("Device ID is invalid.", 400)
     if not isinstance(access_token, str) or not access_token or len(access_token) > 4096:
         raise MatrixServiceError("A valid Matrix device session is required.", 401)
 
+    session = whoami(access_token)
+    identity = MatrixIdentity.objects.select_related("user").filter(
+        matrix_user_id=session["user_id"],
+    ).first()
+    if identity is None:
+        raise MatrixServiceError("This Matrix account is not registered with Paas Deployer.", 403)
+    if session["device_id"] != device_id:
+        raise MatrixServiceError("Matrix session belongs to a different device.", 403)
+
     device = MatrixDevice.objects.filter(
-        user=user,
+        user=identity.user,
         device_id=device_id,
         revoked_at__isnull=True,
     ).first()
     if device is None:
         raise MatrixServiceError("Matrix device not found or permanently revoked.", 404)
 
-    identity = MatrixIdentity.objects.filter(user=user).first()
-    if identity is None:
-        raise MatrixServiceError("This account has no provisioned Matrix identity.", 403)
-
-    try:
-        session = whoami(access_token)
-    except MatrixServiceError as exc:
-        if exc.status_code == 401:
-            # The token is already unusable. The authenticated Django caller
-            # can safely mark only their own registered device as signed out.
-            device.logged_out_at = timezone.now()
-            device.save(update_fields=("logged_out_at",))
-            return
-        raise
-
-    if session["user_id"] != identity.matrix_user_id or session["device_id"] != device.device_id:
-        raise MatrixServiceError("Matrix session belongs to a different account or device.", 403)
-
     # Persist intent before calling Synapse. If the response is lost after the
-    # server processed the logout, inventory still recognizes it as expected.
+    # server processed the logout, inventory recognizes the expected deletion.
     device.logged_out_at = timezone.now()
     device.save(update_fields=("logged_out_at",))
     try:
