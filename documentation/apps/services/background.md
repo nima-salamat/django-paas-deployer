@@ -26,3 +26,5 @@ Start/stop/restart execution is owned by deployments Celery/runtime orchestratio
 
 ## Tests
 test_revisioning.py protects snapshot/immutability. Volume storage/quota tests protect ownership and detach/release semantics. Shell permission/policy/regression tests protect authorization, workspace and audit boundaries.
+
+The explicit rebuild teardown and lifecycle fencing path is implemented in `src/services/lifecycle/rebuild.py`; it bumps the lifecycle generation before removing runtime resources and records a conservative failure projection when teardown cannot complete.
