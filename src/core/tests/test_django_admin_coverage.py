@@ -99,6 +99,18 @@ class DjangoAdminModelCoverageTests(SimpleTestCase):
         self.assertFalse(model_admin.has_delete_permission(None))
         self.assertFalse(model_admin.has_change_permission(None))
 
+    def test_matrix_identity_admin_hides_backend_encrypted_password(self):
+        from messenger.models import MatrixIdentity, MatrixDevice
+        from core.django_admin import ReadOnlyProjectModelAdmin
+
+        identity_admin = admin.site._registry[MatrixIdentity]
+        device_admin = admin.site._registry[MatrixDevice]
+        self.assertIsInstance(identity_admin, ReadOnlyProjectModelAdmin)
+        self.assertIsInstance(device_admin, ReadOnlyProjectModelAdmin)
+        self.assertIn("encrypted_password", identity_admin.get_exclude(None))
+        self.assertFalse(identity_admin.has_change_permission(None))
+        self.assertFalse(device_admin.has_change_permission(None))
+
     def test_resource_plan_admin_covers_logging_fields(self):
         from plans.models import Plan
 
