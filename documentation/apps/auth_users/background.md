@@ -20,6 +20,14 @@ Password reset and verified contact changes revoke existing sessions after the d
 
 Expired/old AuthCode cleanup is an admin operation. Rotated SimpleJWT refresh tokens use the SimpleJWT blacklist app and expired blacklist records are purged daily by the authentication Celery task. Login logs record success/failure metadata without storing raw passwords or session credentials.
 
+## Expired sessions versus intentional logout
+
+A rejected/expired refresh credential is not treated as the user's logout action. The frontend discards only the unusable Django access/refresh pair, preserves the last successful non-secret login identifier and the independent Matrix device/crypto state, and emits an app-wide `session-expired` lifecycle event. A global dialog overlays the current route and fetches the current public LoginSettings; it reuses the normal authentication API flow without navigating away after success.
+
+The dialog marks its start-auth request with `existing_account_only=true`. The backend enforces that flag before the signup path, so `allow_auto_signup` and invite rules cannot accidentally create an account during reauthentication. It still applies the current configured identifier, OTP, password and second-factor policy; configuration changes are therefore reflected the next time the dialog is opened.
+
+An explicit user logout is a separate lifecycle event: it invalidates the Matrix device token, revokes the current Django session when still active, clears remembered identifiers and removes local bearer credentials. Ordinary expiry does not revoke or erase Matrix device identity or local encryption keys. Network errors and server 5xx responses do not trigger expiry or destroy stored auth state.
+
 ## Side effects
 
 Authentication success can create Device/UserSession/LoginLog state and issue JWTs. Contact confirmation mutates User and revokes sessions with transaction.on_commit. These are security-sensitive cross-app side effects.
