@@ -113,6 +113,16 @@ class StartAuthAPIView(APIView):
 
         # ---------- User does not exist → maybe create ----------
         if user is None:
+            # The session-expiry reauthentication dialog must never become a
+            # signup surface. Settings may allow public auto-signup, but this
+            # request explicitly asks for an existing account only.
+            if data.get("existing_account_only") is True:
+                _log_failed(request, data, "reauthentication account not found")
+                return err(
+                    _("error::unable to find an existing account with these details"),
+                    status.HTTP_401_UNAUTHORIZED,
+                )
+
             allowed, invite, create_err = can_create_user(settings, invite_token)
             if not allowed:
                 return err(create_err or _("error::signup is closed"), status.HTTP_403_FORBIDDEN)
