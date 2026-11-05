@@ -127,7 +127,7 @@ class HasValidMatrixDeviceLogoutToken(BasePermission):
             session = whoami(access_token)
         except MatrixServiceError:
             return False
-        return (
+        valid = (
             session.get("device_id") == device_id
             and MatrixIdentity.objects.filter(matrix_user_id=session.get("user_id")).exists()
             and MatrixDevice.objects.filter(
@@ -136,6 +136,11 @@ class HasValidMatrixDeviceLogoutToken(BasePermission):
                 user__messenger_matrix_identity__matrix_user_id=session.get("user_id"),
             ).exists()
         )
+        if valid:
+            # Reuse the already-verified token binding in the handler rather
+            # than issuing a second whoami request to the homeserver.
+            request.matrix_logout_session = session
+        return valid
 
 
 class MatrixDeviceLogoutAPIView(APIView):
@@ -156,7 +161,7 @@ class MatrixDeviceLogoutAPIView(APIView):
         if not access_token or not device_id:
             return err("A Matrix device session is required.", status.HTTP_401_UNAUTHORIZED)
         try:
-            logout_matrix_device(device_id, access_token)
+            logout_matrix_device(device_id, access_token, verified_session=getattr(request, "matrix_logout_session", None))
         except MatrixServiceError as exc:
             return _service_error_response(exc)
         except Exception:
