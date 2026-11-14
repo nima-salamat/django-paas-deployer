@@ -37,3 +37,20 @@ def test_deployment_log_has_no_cross_database_reverse_relations():
     deploy_log = models.split("class DeployLog", 1)[1].split("class BuildCacheArtifact", 1)[0]
     assert 'related_name="+"' in deploy_log
     assert "db_constraint=False" in deploy_log
+
+
+def test_deploy_intent_schema_drift_has_follow_up_idempotent_repair():
+    migration = (
+        ROOT
+        / "src"
+        / "deploy"
+        / "migrations"
+        / "0036_repair_deploy_intent_schema_drift.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"0035_repair_missing_deploy_intent_columns"' in migration
+    assert "connection.introspection.get_table_description" in migration
+    assert "schema_editor.add_field" in migration
+    assert '"expected_lifecycle_generation"' in migration
+    assert '"expected_active_revision_id"' in migration
+    assert '"worker_recovery_attempts"' in migration
