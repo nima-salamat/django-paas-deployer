@@ -40,7 +40,7 @@ class ReadyAppRuntimeControlTests(TestCase):
             max_cpu=2.0,
             max_ram=4096,
             max_storage=64,
-            price_per_hour=0,
+            price_per_hour=1.0,
             storage_type=StorageTypeChoices.SSD,
         )
         cls.app_plan = Plan.objects.create(
@@ -115,6 +115,8 @@ class ReadyAppRuntimeControlTests(TestCase):
         self.assertEqual(instance.status, ApplicationStatus.DEPLOYING)
         self.assertEqual(instance.runtime_operation, "start")
         self.assertEqual(instance.stage, "starting_services")
+        self.assertIsNotNone(instance.execution_deadline)
+        self.assertIsNotNone(instance.started_at)
         enqueue.assert_called_once_with(str(instance.pk), instance.runtime_operation_generation)
 
         for binding in instance.services.select_related("service", "deploy"):
@@ -127,6 +129,29 @@ class ReadyAppRuntimeControlTests(TestCase):
                 binding.deploy.expected_lifecycle_generation,
                 binding.service.lifecycle_generation,
             )
+
+    def test_start_all_requires_stop_all_after_a_degraded_runtime(self):
+        instance = self.install_wordpress("runtime-start-degraded-guard")
+        self.set_children(
+            instance,
+            status=SERVICE_STATUS_CHOICES.FAILED,
+            desired_state="running",
+            deploy_status=DeploymentStatusChoices.FAILED,
+        )
+        ApplicationInstance.objects.filter(pk=instance.pk).update(
+            status=ApplicationStatus.DEGRADED,
+            stage="runtime_start_failed",
+        )
+
+        with patch("app_catalog.apis.start_application_runtime.delay") as enqueue:
+            response = ApplicationInstanceStartAPIView.as_view()(
+                self.request("POST", f"/api/application-catalog/installations/{instance.pk}/start/"),
+                pk=instance.pk,
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "application_stop_before_restart")
+        enqueue.assert_not_called()
 
     def test_stop_all_queues_a_persisted_parent_stop_operation(self):
         instance = self.install_wordpress("runtime-stop-api")
