@@ -28,8 +28,10 @@ def dispatch_pending(*, batch_size: int = 100) -> dict[str, int]:
             with transaction.atomic():
                 row = (
                     DeploymentEventOutbox.objects
+                    # The deployment FK is nullable. Do not LEFT JOIN it while
+                    # applying FOR UPDATE: PostgreSQL cannot lock the nullable
+                    # side of an outer join. deployment_id is read from the row.
                     .select_for_update()
-                    .select_related("deployment")
                     .filter(pk=row_id, dispatched_at__isnull=True)
                     .first()
                 )
