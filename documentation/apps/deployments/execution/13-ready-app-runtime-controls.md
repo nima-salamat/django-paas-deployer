@@ -46,6 +46,7 @@ ApplicationInstanceService. Individual child deletion is rejected by the
 service APIs and the database relation uses `on_delete=RESTRICT`; delete the
 parent installation to clean up the complete managed stack.
 
-Individual user/admin Start, Stop, and rebuild requests for a managed child
-return HTTP 409 (`catalog_service_managed`). Use the parent Ready App controls
-instead. This prevents a child action from bypassing dependency ordering.
+Individual user/admin Start, Stop, Restart, rebuild, and runtime-purge requests
+for a managed child return HTTP 409 (`catalog_service_managed`). Use the
+parent Ready App controls instead. This prevents a child action from bypassing
+dependency ordering or removing a runtime that the parent still owns.
