@@ -208,17 +208,24 @@ def supervise_ready_applications():
     queryset = (
         ApplicationInstance.objects
         .filter(
-            status__in=(
-                ApplicationStatus.RUNNING,
-                ApplicationStatus.DEGRADED,
-                ApplicationStatus.STOPPED,
-            ),
+            Q(
+                status__in=(
+                    ApplicationStatus.RUNNING,
+                    ApplicationStatus.DEGRADED,
+                    ApplicationStatus.STOPPED,
+                ),
+            )
+            | Q(
+                status=ApplicationStatus.FAILED,
+                stage="state_corrupted",
+                error_code="APPLICATION_STATE_CORRUPTED",
+            )
         )
         .exclude(stage="deletion_pending")
         .order_by("updated_at")
     )[:batch_size]
 
-    healthy = degraded = stopped = corrupted = missing = 0
+    healthy = degraded = stopped = corrupted = missing = unavailable = 0
     for instance in queryset.iterator():
         try:
             result = ApplicationStackExecutor(str(instance.pk)).supervise_runtime()
@@ -233,6 +240,8 @@ def supervise_ready_applications():
                 corrupted += 1
             elif state == "missing":
                 missing += 1
+            elif state == "database_unavailable":
+                unavailable += 1
         except Exception:
             logger.exception(
                 "Ready App runtime supervisor failed for application %s",
@@ -247,6 +256,7 @@ def supervise_ready_applications():
         "stopped": stopped,
         "corrupted": corrupted,
         "missing": missing,
+        "database_unavailable": unavailable,
     }
 
 
