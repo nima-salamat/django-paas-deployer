@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from django.db.models.deletion import RestrictedError
 from django.test import TestCase
 from rest_framework.test import APIRequestFactory, force_authenticate
 
@@ -22,6 +23,7 @@ from core.global_settings.config import (
 from deploy.models import DeploymentStatusChoices
 from plans.models import Plan
 from services.models import Service
+from services.api.runtime import start_service_apiview, stop_service_apiview
 from users.models import User
 
 
@@ -52,8 +54,8 @@ class ReadyAppRuntimeControlTests(TestCase):
             **common,
         )
 
-    def request(self, method, path):
-        request = getattr(APIRequestFactory(), method.lower())(path, data={}, format="json")
+    def request(self, method, path, data=None):
+        request = getattr(APIRequestFactory(), method.lower())(path, data=data or {}, format="json")
         force_authenticate(request, user=self.user)
         return request
 
@@ -203,6 +205,32 @@ class ReadyAppRuntimeControlTests(TestCase):
         self.assertEqual(instance.status, ApplicationStatus.STOPPED)
         self.assertEqual(instance.stage, "application_stopped")
         self.assertEqual(instance.runtime_operation, "")
+
+
+    def test_individual_service_start_and_stop_are_rejected_for_app_children(self):
+        from unittest.mock import patch
+
+        instance = self.install_wordpress("runtime-child-guard")
+        service = instance.services.get(service_key="wordpress").service
+
+        with patch("services.api.runtime._get_service_for_user_or_share", return_value=(service, None)):
+            start_response = start_service_apiview(
+                self.request("POST", "/api/services/start/", {"service_id": str(service.pk)})
+            )
+            stop_response = stop_service_apiview(
+                self.request("POST", "/api/services/stop/", {"service_id": str(service.pk)})
+            )
+
+        self.assertEqual(start_response.status_code, 409)
+        self.assertEqual(start_response.data["code"], "catalog_service_managed")
+        self.assertEqual(stop_response.status_code, 409)
+        self.assertEqual(stop_response.data["code"], "catalog_service_managed")
+
+    def test_child_service_cannot_be_deleted_while_application_binding_exists(self):
+        instance = self.install_wordpress("runtime-child-delete-guard")
+        service = instance.services.get(service_key="wordpress").service
+        with self.assertRaises(RestrictedError):
+            service.delete()
 
     def test_runtime_operations_reject_deletion_pending_installations(self):
         instance = self.install_wordpress("runtime-deleting")
