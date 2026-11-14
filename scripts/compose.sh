@@ -6,7 +6,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR/.."
 
-# Read one unquoted KEY=value from .env without sourcing it as shell code.
+# Read one KEY=value from .env without sourcing it as shell code.
 # Matrix PostgreSQL passwords should be generated as hex (e.g. openssl rand -hex 32).
 dotenv_value() {
     key=$1
@@ -19,7 +19,8 @@ dotenv_value() {
                 value = substr($0, index($0, "=") + 1)
                 sub(/\r$/, "", value)
                 # Match Compose .env quoting: single-quoted values are literal.
-                if (length(value) >= 2 && substr(value, 1, 1) == "'" && substr(value, length(value), 1) == "'") {
+                single_quote = sprintf("%c", 39)
+                if (length(value) >= 2 && substr(value, 1, 1) == single_quote && substr(value, length(value), 1) == single_quote) {
                     value = substr(value, 2, length(value) - 2)
                 } else if (length(value) >= 2 && substr(value, 1, 1) == "\"" && substr(value, length(value), 1) == "\"") {
                     value = substr(value, 2, length(value) - 2)
