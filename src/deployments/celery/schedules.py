@@ -1851,6 +1851,32 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
             runtime = resolver.registry.resolve_adapter(selection)
             service_name = service.get_docker_service_name()
             deploy = get_authoritative_deploy(service)
+            backend_runtime = getattr(runtime, "runtime", None) or runtime
+
+            def cleanup_stopped_task_containers() -> None:
+                cleanup = getattr(
+                    backend_runtime,
+                    "cleanup_stopped_task_containers",
+                    None,
+                )
+                if not callable(cleanup):
+                    return
+                try:
+                    summary = cleanup(str(service.pk))
+                    if summary.get("removed"):
+                        logger.info(
+                            "Runtime reconciliation removed %s stale stopped task container(s) for service=%s.",
+                            summary["removed"],
+                            service.pk,
+                        )
+                except Exception:
+                    # Runtime inspection/status repair must not fail because
+                    # best-effort removal of historical task containers failed.
+                    logger.warning(
+                        "Runtime reconciliation could not clean stopped task containers for service=%s.",
+                        service.pk,
+                        exc_info=True,
+                    )
 
             try:
                 observed = runtime.inspect(
@@ -2020,9 +2046,19 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
                         return
                     if (
                         decision.action is ReconciliationAction.CONVERGED
-                        and locked.status == SERVICE_STATUS_CHOICES.SUCCEEDED
+                        and desired_state == "running"
+                        and locked.status != SERVICE_STATUS_CHOICES.RUNNING
                     ):
-                        mark_service_running(locked, deploy=get_authoritative_deploy(locked))
+                        mark_service_running(
+                            locked,
+                            deploy=get_authoritative_deploy(locked),
+                            allow_runtime_reconciliation=True,
+                            expected_lifecycle_generation=generation,
+                            expected_active_revision_id=desired.revision_id,
+                            expected_desired_state="running",
+                        )
+                if decision.action is ReconciliationAction.CONVERGED:
+                    cleanup_stopped_task_containers()
                 return
 
             context = ReconciliationExecutionContext(
@@ -2096,14 +2132,23 @@ def _reconcile_service_runtime_swarm(service: Service) -> None:
                         service.pk, generation, desired.revision_id,
                     )
                     return
-                if decision.action is ReconciliationAction.STOP:
+                if decision.action is ReconciliationAction.STOP and result.success:
                     mark_service_stopped(locked, deploy=get_authoritative_deploy(locked))
                 elif result.success and decision.action in {
                     ReconciliationAction.CREATE,
                     ReconciliationAction.UPDATE,
                     ReconciliationAction.REPAIR,
                 }:
-                    mark_service_running(locked, deploy=get_authoritative_deploy(locked))
+                    mark_service_running(
+                        locked,
+                        deploy=get_authoritative_deploy(locked),
+                        allow_runtime_reconciliation=True,
+                        expected_lifecycle_generation=generation,
+                        expected_active_revision_id=desired.revision_id,
+                        expected_desired_state="running",
+                    )
+            if result.success:
+                cleanup_stopped_task_containers()
 
 
 
