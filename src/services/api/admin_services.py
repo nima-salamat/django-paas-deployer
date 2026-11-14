@@ -453,6 +453,16 @@ def admin_start_service_apiview(request):
     try:
         with transaction.atomic():
             service_item = Service.objects.select_for_update().get(id=service_id)
+            from app_catalog.models import ApplicationInstanceService
+            if ApplicationInstanceService.objects.filter(service_id=service_item.pk).exists():
+                return Response(
+                    {
+                        "result": "error",
+                        "code": "catalog_service_managed",
+                        "detail": _("This service is managed by a Ready App. Use Start All or Stop All on the parent application."),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
             deploy_item = get_active_deploy(service_item)
             if deploy_item is None:
                 return Response(
@@ -633,6 +643,16 @@ def admin_stop_service_apiview(request):
     try:
         with transaction.atomic():
             service_item = Service.objects.select_for_update().get(id=service_id)
+            from app_catalog.models import ApplicationInstanceService
+            if ApplicationInstanceService.objects.filter(service_id=service_item.pk).exists():
+                return Response(
+                    {
+                        "result": "error",
+                        "code": "catalog_service_managed",
+                        "detail": _("This service is managed by a Ready App. Use Start All or Stop All on the parent application."),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
 
             if service_item.status in (
                 SERVICE_STATUS_CHOICES.QUEUED,
