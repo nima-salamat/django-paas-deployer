@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import Iterable
 
 from django.conf import settings
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.utils import timezone
 
 from deploy.models import DeploymentStatusChoices
@@ -941,12 +941,20 @@ class ApplicationStackExecutor:
         # A live installation can legitimately pass through deletion_pending
         # while its resources are being removed. Do not report that cleanup
         # transition as runtime corruption.
+        recoverable_corruption = (
+            current.status == ApplicationStatus.FAILED
+            and current.stage == "state_corrupted"
+            and current.error_code == "APPLICATION_STATE_CORRUPTED"
+        )
         if (
-            current.status not in {
-                ApplicationStatus.RUNNING,
-                ApplicationStatus.DEGRADED,
-                ApplicationStatus.STOPPED,
-            }
+            (
+                current.status not in {
+                    ApplicationStatus.RUNNING,
+                    ApplicationStatus.DEGRADED,
+                    ApplicationStatus.STOPPED,
+                }
+                and not recoverable_corruption
+            )
             or current.stage == "deletion_pending"
         ):
             return {"status": "skipped", "application_status": str(current.status)}
@@ -955,6 +963,17 @@ class ApplicationStackExecutor:
             instance, plan = self._load()
         except ApplicationInstance.DoesNotExist:
             return {"status": "missing"}
+        except DatabaseError as exc:
+            message = (
+                "Ready App coordinator database schema is unavailable; "
+                f"runtime validation was deferred: {str(exc)[:450]}"
+            )
+            logger.exception(
+                "Ready App %s supervisor could not read coordinator state; "
+                "leaving its persisted status unchanged.",
+                self.instance_id,
+            )
+            return {"status": "database_unavailable", "message": message}
         except Exception as exc:
             message = (
                 "Ready App coordinator state is inconsistent and could not be "
@@ -1100,13 +1119,22 @@ class ApplicationStackExecutor:
                 .filter(pk=self.instance_id)
                 .first()
             )
+            recoverable_corruption = bool(
+                locked
+                and locked.status == ApplicationStatus.FAILED
+                and locked.stage == "state_corrupted"
+                and locked.error_code == "APPLICATION_STATE_CORRUPTED"
+            )
             if (
                 not locked
-                or locked.status not in {
-                    ApplicationStatus.RUNNING,
-                    ApplicationStatus.DEGRADED,
-                    ApplicationStatus.STOPPED,
-                }
+                or (
+                    locked.status not in {
+                        ApplicationStatus.RUNNING,
+                        ApplicationStatus.DEGRADED,
+                        ApplicationStatus.STOPPED,
+                    }
+                    and not recoverable_corruption
+                )
                 or locked.stage == "deletion_pending"
             ):
                 return {"status": "skipped"}
