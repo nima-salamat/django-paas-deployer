@@ -281,7 +281,7 @@ class ApplicationInstanceDetailAPIView(CatalogPermissionMixin, APIView):
         )
 
 class ApplicationInstanceStartAPIView(CatalogPermissionMixin, APIView):
-    """Start stopped/degraded child services through the persisted app DAG."""
+    """Start a fully stopped Ready App through the persisted dependency DAG."""
 
     def post(self, request, pk):
         try:
