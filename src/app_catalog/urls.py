@@ -5,6 +5,8 @@ from .apis import (
     CatalogResolveAPIView,
     ApplicationInstanceListCreateAPIView,
     ApplicationInstanceDetailAPIView,
+    ApplicationInstanceStartAPIView,
+    ApplicationInstanceStopAPIView,
     ApplicationInstanceCancelAPIView,
 )
 
@@ -14,5 +16,7 @@ urlpatterns = [
     path("apps/<str:catalog_id>/resolve/", CatalogResolveAPIView.as_view(), name="application-catalog-resolve"),
     path("installations/", ApplicationInstanceListCreateAPIView.as_view(), name="application-installation-list-create"),
     path("installations/<uuid:pk>/", ApplicationInstanceDetailAPIView.as_view(), name="application-installation-detail"),
+    path("installations/<uuid:pk>/start/", ApplicationInstanceStartAPIView.as_view(), name="application-installation-start"),
+    path("installations/<uuid:pk>/stop/", ApplicationInstanceStopAPIView.as_view(), name="application-installation-stop"),
     path("installations/<uuid:pk>/cancel/", ApplicationInstanceCancelAPIView.as_view(), name="application-installation-cancel"),
 ]
