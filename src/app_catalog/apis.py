@@ -1,4 +1,5 @@
 import logging
+from datetime import timedelta
 
 from django.db import transaction
 from django.utils import timezone
@@ -303,7 +304,15 @@ class ApplicationInstanceStartAPIView(CatalogPermissionMixin, APIView):
                         {"detail": "An application lifecycle operation is already in progress.", "status": instance.status},
                         status=status.HTTP_409_CONFLICT,
                     )
-                if instance.status in {ApplicationStatus.PENDING, ApplicationStatus.FAILED, ApplicationStatus.CANCELLED}:
+                if instance.status == ApplicationStatus.DEGRADED:
+                    return Response(
+                        {
+                            "detail": "This application has a degraded runtime. Use Stop All first to confirm every service is stopped, then run Start All.",
+                            "code": "application_stop_before_restart",
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                if instance.status not in {ApplicationStatus.STOPPED, ApplicationStatus.RUNNING}:
                     return Response(
                         {"detail": "This installation is not in a restartable state. Reinstall it or inspect the failed installation first."},
                         status=status.HTTP_409_CONFLICT,
@@ -353,13 +362,13 @@ class ApplicationInstanceStartAPIView(CatalogPermissionMixin, APIView):
                     ):
                         continue
 
-                    if service_status not in {
-                        str(SERVICE_STATUS_CHOICES.STOPPED).lower(),
-                        str(SERVICE_STATUS_CHOICES.FAILED).lower(),
-                    }:
+                    if service_status != str(SERVICE_STATUS_CHOICES.STOPPED).lower():
                         return Response(
                             {
-                                "detail": f"Cannot start all services safely: '{key}' is currently {service_status or 'unknown'}.",
+                                "detail": (
+                                    f"Cannot start all services safely: '{key}' is {service_status or 'unknown'}. "
+                                    "Use Stop All first so every child runtime is confirmed stopped."
+                                ),
                                 "service_key": key,
                                 "service_status": service_status,
                             },
@@ -398,6 +407,9 @@ class ApplicationInstanceStartAPIView(CatalogPermissionMixin, APIView):
                     )
 
                 now = timezone.now()
+                execution_deadline = now + timedelta(
+                    minutes=ApplicationStackExecutor._timeout_minutes()
+                )
                 for binding in to_start:
                     service = binding.service
                     generation = bump_lifecycle(service.pk, desired_state="running")
@@ -437,11 +449,14 @@ class ApplicationInstanceStartAPIView(CatalogPermissionMixin, APIView):
                 instance.runtime_operation = "start"
                 instance.runtime_operation_generation = int(instance.runtime_operation_generation or 0) + 1
                 instance.cancel_requested = False
+                instance.started_at = now
+                instance.execution_deadline = execution_deadline
                 instance.error_code = ""
                 instance.error_message = ""
                 instance.save(update_fields=[
                     "status", "stage", "runtime_operation",
                     "runtime_operation_generation", "cancel_requested",
+                    "started_at", "execution_deadline",
                     "error_code", "error_message", "updated_at",
                 ])
                 operation_generation = int(instance.runtime_operation_generation)
