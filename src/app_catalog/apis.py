@@ -500,19 +500,18 @@ class ApplicationInstanceStopAPIView(CatalogPermissionMixin, APIView):
                         {"detail": "This application is being deleted.", "code": "application_deletion_pending"},
                         status=status.HTTP_409_CONFLICT,
                     )
-                if instance.status == ApplicationStatus.STOPPED:
-                    return Response(
-                        ApplicationInstanceSerializer(instance).data,
-                        status=status.HTTP_200_OK,
-                    )
                 if instance.status == ApplicationStatus.STOPPING and instance.runtime_operation == "stop":
                     return Response(
                         ApplicationInstanceSerializer(instance).data,
                         status=status.HTTP_202_ACCEPTED,
                     )
-                if instance.status != ApplicationStatus.RUNNING and instance.status != ApplicationStatus.DEGRADED:
+                if instance.status not in {
+                    ApplicationStatus.RUNNING,
+                    ApplicationStatus.DEGRADED,
+                    ApplicationStatus.STOPPED,
+                }:
                     return Response(
-                        {"detail": "Stop All is available only for running or degraded applications.", "status": instance.status},
+                        {"detail": "Stop All is available only for running, degraded, or partially stopped applications.", "status": instance.status},
                         status=status.HTTP_409_CONFLICT,
                     )
                 if instance.runtime_operation:
@@ -527,6 +526,17 @@ class ApplicationInstanceStopAPIView(CatalogPermissionMixin, APIView):
                     .select_related("service")
                     .filter(instance_id=instance.pk)
                 )
+                all_children_stopped = all(
+                    str(binding.service.status or "").lower() == str(SERVICE_STATUS_CHOICES.STOPPED).lower()
+                    and str(binding.service.desired_state or "").lower() == "stopped"
+                    for binding in bindings
+                )
+                if instance.status == ApplicationStatus.STOPPED and all_children_stopped:
+                    return Response(
+                        ApplicationInstanceSerializer(instance).data,
+                        status=status.HTTP_200_OK,
+                    )
+
                 for binding in bindings:
                     service_status = str(binding.service.status or "").lower()
                     if service_status in {
