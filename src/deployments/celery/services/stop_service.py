@@ -207,6 +207,7 @@ class StopService:
         container_name = service.get_docker_service_name()
         active_deploy = get_active_deploy(service)
         stopped = False
+        backend_runtime = None
 
         try:
             if swarm_enabled():
@@ -405,6 +406,23 @@ class StopService:
                 stopped = True
 
             if stopped:
+                # Swarm retains task containers after a scale-to-zero. Prune
+                # only terminal, owner-verified tasks after the group is
+                # confirmed stopped; cleanup failure must not undo the stop.
+                if (
+                    backend_runtime is not None
+                    and hasattr(backend_runtime, "cleanup_stopped_task_containers")
+                ):
+                    try:
+                        backend_runtime.cleanup_stopped_task_containers(
+                            str(service_id)
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Stopped-task container cleanup failed for service %s.",
+                            service_id,
+                            exc_info=True,
+                        )
                 self._transition_if_current_generation(
                     service_id,
                     SERVICE_STATUS_CHOICES.STOPPED,
