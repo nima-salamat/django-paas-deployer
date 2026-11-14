@@ -16,15 +16,21 @@ while the same stop operation is active are idempotent.
 ## Start All
 
 Start All reuses the immutable orchestration snapshot captured at installation
-time and the existing ApplicationStackExecutor scheduler. Stopped or failed
-children are reset for a new attempt; already-running children with a successful
-Deploy are retained. The scheduler dispatches the ready DAG frontier and only
-starts dependent services after their dependencies reach successful deployment
-state.
+time and the existing ApplicationStackExecutor scheduler. It is available for a
+fully stopped application; already-running children with a successful Deploy
+are retained, while stopped children are queued against their existing active
+revision. A child that is failed, queued, deploying, or otherwise not confirmed
+stopped/running is rejected rather than started speculatively.
+
+For a `degraded` application, run Stop All first. This normalizes every child
+runtime and confirms that dependencies are safe to start again. Start All uses
+the existing deployment execution task for the active revision; it does not
+create a new application revision or request a source rebuild.
 
 The parent enters `deploying` with `runtime_operation=start`. Completion
 returns it to `running`; an unsuccessful restart leaves it `degraded` with
-an error message.
+an error message. Each new start attempt receives a fresh execution deadline
+so an old installation timeout cannot expire a later restart.
 
 ## Stop All
 
