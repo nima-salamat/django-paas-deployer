@@ -370,6 +370,34 @@ class ApplicationInstanceStartAPIView(CatalogPermissionMixin, APIView):
                             },
                             status=status.HTTP_409_CONFLICT,
                         )
+                elif instance.status == ApplicationStatus.RUNNING:
+                    unhealthy = [
+                        key
+                        for key, binding in bindings.items()
+                        if not (
+                            str(binding.service.status or "").lower()
+                            in {
+                                str(SERVICE_STATUS_CHOICES.RUNNING).lower(),
+                                str(SERVICE_STATUS_CHOICES.SUCCEEDED).lower(),
+                            }
+                            and str(binding.service.desired_state or "").lower() == "running"
+                            and str(binding.deploy.status or "").lower()
+                            == str(DeploymentStatusChoices.SUCCEEDED).lower()
+                        )
+                    ]
+                    if unhealthy:
+                        return Response(
+                            {
+                                "detail": (
+                                    "The parent is marked running, but these child services are not healthy: "
+                                    + ", ".join(sorted(unhealthy))
+                                    + ". Run Stop All before starting the complete stack again."
+                                ),
+                                "code": "application_stop_before_restart",
+                                "service_keys": sorted(unhealthy),
+                            },
+                            status=status.HTTP_409_CONFLICT,
+                        )
 
                 to_start = []
                 for key in plan.topological_order():
@@ -380,7 +408,10 @@ class ApplicationInstanceStartAPIView(CatalogPermissionMixin, APIView):
                     deploy_status = str(binding.deploy.status or "").lower()
 
                     if (
-                        service_status == str(SERVICE_STATUS_CHOICES.RUNNING).lower()
+                        service_status in {
+                            str(SERVICE_STATUS_CHOICES.RUNNING).lower(),
+                            str(SERVICE_STATUS_CHOICES.SUCCEEDED).lower(),
+                        }
                         and desired_state == "running"
                         and deploy_status == str(DeploymentStatusChoices.SUCCEEDED).lower()
                     ):
