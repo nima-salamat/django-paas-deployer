@@ -294,7 +294,7 @@ class ApplicationInstanceSerializer(serializers.ModelSerializer):
         model = ApplicationInstance
         fields = (
             "id", "name", "catalog_id", "definition_version", "software_version", "variant_id",
-            "status", "stage", "cancel_requested", "config", "error_code", "error_message", "created_at",
+            "status", "stage", "runtime_operation", "cancel_requested", "config", "error_code", "error_message", "created_at",
             "updated_at", "deployed_at", "services", "application_url", "application_host", "resource_summary",
         )
 
