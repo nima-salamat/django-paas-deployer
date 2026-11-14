@@ -10,6 +10,7 @@ from deployments.common.exceptions import DeploymentError
 from deployments.core.orchestrator import DeploymentOrchestrator
 from deployments.core.swarm import (
     SwarmRuntime,
+    _external_service_matches,
     compile_compose_service,
     _process_resource_limits,
     _validate_replicas,
@@ -1049,3 +1050,68 @@ class SwarmExternalImageTimeoutTests(unittest.TestCase):
         self.assertEqual(service.update.call_count, 2)
         self.assertTrue(runtime._last_apply_operation["mutation_succeeded"])
         runtime.client.services.get.assert_called()
+
+
+class SwarmExternalImageSpecMatchingTests(unittest.TestCase):
+    def test_swarm_manager_commit_detection_ignores_only_docker_default_path(self):
+        service = SimpleNamespace(
+            attrs={
+                "Spec": {
+                    "Labels": {
+                        "managed-by": "passdeployer",
+                        "service.id": "svc-1",
+                    },
+                    "TaskTemplate": {
+                        "ContainerSpec": {
+                            "Image": "mariadb:11",
+                            "Env": [
+                                "MARIADB_ROOT_PASSWORD=secret",
+                                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                            ],
+                        }
+                    },
+                }
+            }
+        )
+
+        self.assertTrue(
+            _external_service_matches(
+                service,
+                image_ref="mariadb:11",
+                labels={
+                    "managed-by": "passdeployer",
+                    "service.id": "svc-1",
+                },
+                environment={"MARIADB_ROOT_PASSWORD": "secret"},
+            )
+        )
+
+    def test_swarm_manager_commit_detection_rejects_environment_mismatch(self):
+        service = SimpleNamespace(
+            attrs={
+                "Spec": {
+                    "Labels": {
+                        "managed-by": "passdeployer",
+                        "service.id": "svc-1",
+                    },
+                    "TaskTemplate": {
+                        "ContainerSpec": {
+                            "Image": "mariadb:11",
+                            "Env": ["MARIADB_ROOT_PASSWORD=old"],
+                        }
+                    },
+                }
+            }
+        )
+
+        self.assertFalse(
+            _external_service_matches(
+                service,
+                image_ref="mariadb:11",
+                labels={
+                    "managed-by": "passdeployer",
+                    "service.id": "svc-1",
+                },
+                environment={"MARIADB_ROOT_PASSWORD": "new"},
+            )
+        )
