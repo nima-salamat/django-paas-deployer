@@ -346,7 +346,15 @@ def _continue_application_stop(
                     desired_state = str(service.desired_state or "").lower()
                     stopped_status = str(SERVICE_STATUS_CHOICES.STOPPED).lower()
                     stopping_status = str(SERVICE_STATUS_CHOICES.STOPPING).lower()
-                    if service_status == stopped_status and desired_state == "stopped":
+                    if service_status == stopped_status:
+                        if desired_state != "stopped":
+                            lifecycle_generation = bump_lifecycle(
+                                service.pk,
+                                desired_state="stopped",
+                            )
+                            service.desired_state = "stopped"
+                            service.lifecycle_generation = lifecycle_generation
+                            service.save(update_fields=["desired_state", "lifecycle_generation"])
                         continue
                     if service_status in {
                         str(SERVICE_STATUS_CHOICES.QUEUED).lower(),
