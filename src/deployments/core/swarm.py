@@ -72,6 +72,47 @@ class SwarmServiceState:
     healthcheck_configured: bool = False
 
 
+def _is_swarm_deadline_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return "deadlineexceeded" in message or "context deadline exceeded" in message
+
+
+def _external_service_matches(
+    service,
+    *,
+    image_ref: str,
+    labels: Mapping[str, Any],
+    environment: Mapping[str, Any],
+) -> bool:
+    """Check whether a timed-out Swarm mutation actually reached the manager."""
+    attrs = getattr(service, "attrs", None) or {}
+    spec = attrs.get("Spec") or {}
+    task_template = spec.get("TaskTemplate") or {}
+    container_spec = task_template.get("ContainerSpec") or {}
+    actual_image = str(container_spec.get("Image") or "").strip()
+    image_matches = (
+        actual_image == str(image_ref)
+        or actual_image.startswith(str(image_ref) + "@")
+    )
+    actual_labels = {
+        str(key): str(value)
+        for key, value in dict(spec.get("Labels") or {}).items()
+    }
+    labels_match = all(
+        actual_labels.get(str(key)) == str(value)
+        for key, value in dict(labels or {}).items()
+    )
+    expected_env = {
+        str(key) + "=" + str(value)
+        for key, value in dict(environment or {}).items()
+    }
+    actual_env = {
+        str(item)
+        for item in (container_spec.get("Env") or ())
+    }
+    return bool(image_matches and labels_match and actual_env == expected_env)
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
@@ -2937,6 +2978,22 @@ class SwarmRuntime:
         replicas = _validate_replicas(replicas)
         from types import SimpleNamespace
 
+        normalized_labels = {
+            str(key): str(value) for key, value in (labels or {}).items()
+        }
+        expected_service_id = str(
+            normalized_labels.get("passdeployer.service")
+            or normalized_labels.get("service.id")
+            or normalized_labels.get("io.passdeployer.service")
+            or ""
+        ).strip()
+        if not expected_service_id:
+            raise DeploymentError(
+                "External-image Swarm services require a service ownership label.",
+                stage="swarm_ownership",
+                code="SWARM_RESOURCE_OWNERSHIP_UNKNOWN",
+            )
+
         network_specs = [
             SimpleNamespace(name=str(network), driver="overlay", internal=None, attachable=True)
             for network in networks
@@ -2988,7 +3045,7 @@ class SwarmRuntime:
             networks=network_specs,
             volumes=volume_specs,
             endpoints=endpoint_specs,
-            labels={str(k): str(v) for k, v in (labels or {}).items()},
+            labels=normalized_labels,
             public_host=None,
             health_timeout=180,
             process=None,
@@ -3014,22 +3071,154 @@ class SwarmRuntime:
             image_ref=image_ref,
             compose_spec=spec,
         )
-        expected_image = None
+
+        operation = {
+            "name": service_name,
+            "preexisting": False,
+            "mutation_started": False,
+            "mutation_succeeded": False,
+            "operation": "external_image_service",
+        }
+
         try:
-            service = self.client.services.get(service_name)
-            service.reload()
-            expected_service_id = str((labels or {}).get("passdeployer.service") or "").strip()
-            if not expected_service_id:
-                raise DeploymentError(
-                    "External-image Swarm services require a service ownership label.",
-                    stage="swarm_ownership",
-                    code="SWARM_RESOURCE_OWNERSHIP_UNKNOWN",
-                )
-            self._assert_service_owned(service, service_id=expected_service_id)
-            service.update(
-                image=image_ref,
-                **{key: value for key, value in kwargs.items() if key != "name"},
-            )
+            try:
+                service = self.client.services.get(service_name)
+            except docker.errors.NotFound:
+                service = None
+
+            if service is None:
+                operation["mutation_started"] = True
+                try:
+                    service = self.client.services.create(
+                        image_ref,
+                        **{key: value for key, value in kwargs.items() if key != "name"},
+                    )
+                    operation["mutation_succeeded"] = True
+                except docker.errors.APIError as exc:
+                    # A manager timeout can be returned after the service was
+                    # created. Read the deterministic name before retrying or
+                    # treating the deploy as failed.
+                    try:
+                        service = self.client.services.get(service_name)
+                        service.reload()
+                    except docker.errors.NotFound:
+                        raise DeploymentError(
+                            f"Unable to create Swarm service {service_name!r}: {exc}",
+                            stage="swarm_create",
+                            code="SWARM_SERVICE_CREATE_FAILED",
+                            recoverable=True,
+                            details={
+                                "service": service_name,
+                                "manager_deadline_exceeded": _is_swarm_deadline_error(exc),
+                            },
+                        ) from exc
+                    if not _external_service_matches(
+                        service,
+                        image_ref=image_ref,
+                        labels=normalized_labels,
+                        environment=config.environment,
+                    ):
+                        raise DeploymentError(
+                            f"Unable to create Swarm service {service_name!r}: {exc}",
+                            stage="swarm_create",
+                            code="SWARM_SERVICE_CREATE_FAILED",
+                            recoverable=True,
+                            details={
+                                "service": service_name,
+                                "manager_deadline_exceeded": _is_swarm_deadline_error(exc),
+                                "observed_spec_matches": False,
+                            },
+                        ) from exc
+                    operation["mutation_succeeded"] = True
+                service.reload()
+            else:
+                operation["preexisting"] = True
+                service.reload()
+                self._assert_service_owned(service, service_id=expected_service_id)
+                update_kwargs = {
+                    key: value for key, value in kwargs.items() if key != "name"
+                }
+                operation["mutation_started"] = True
+                try:
+                    service.update(image=image_ref, **update_kwargs)
+                    operation["mutation_succeeded"] = True
+                except docker.errors.APIError as exc:
+                    try:
+                        service.reload()
+                    except docker.errors.DockerException:
+                        logger.warning(
+                            "Could not inspect Swarm service %s after update API error.",
+                            service_name,
+                            exc_info=True,
+                        )
+                    if _external_service_matches(
+                        service,
+                        image_ref=image_ref,
+                        labels=normalized_labels,
+                        environment=config.environment,
+                    ):
+                        # Swarm accepted the update but the manager response
+                        # timed out. Do not send a duplicate update.
+                        operation["mutation_succeeded"] = True
+                        logger.warning(
+                            "Swarm update for %s returned an API error after the desired spec was committed.",
+                            service_name,
+                        )
+                    elif _is_swarm_deadline_error(exc):
+                        # Bounded retry: re-read ownership/spec, then retry
+                        # once only when the manager has not applied our input.
+                        time.sleep(1.0)
+                        service = self.client.services.get(service_name)
+                        service.reload()
+                        self._assert_service_owned(
+                            service,
+                            service_id=expected_service_id,
+                        )
+                        try:
+                            service.update(image=image_ref, **update_kwargs)
+                            operation["mutation_succeeded"] = True
+                        except docker.errors.APIError as retry_exc:
+                            try:
+                                service.reload()
+                            except docker.errors.DockerException:
+                                pass
+                            if _external_service_matches(
+                                service,
+                                image_ref=image_ref,
+                                labels=normalized_labels,
+                                environment=config.environment,
+                            ):
+                                operation["mutation_succeeded"] = True
+                            else:
+                                raise DeploymentError(
+                                    f"Unable to update Swarm service {service_name!r}: {retry_exc}",
+                                    stage="swarm_update",
+                                    code="SWARM_SERVICE_UPDATE_FAILED",
+                                    recoverable=True,
+                                    details={
+                                        "service": service_name,
+                                        "manager_deadline_exceeded": True,
+                                        "update_attempts": 2,
+                                        "observed_spec_matches": False,
+                                    },
+                                ) from retry_exc
+                    else:
+                        observed = self.inspect_service(service_name)
+                        raise DeploymentError(
+                            f"Unable to update Swarm service {service_name!r}: {exc}",
+                            stage="swarm_update",
+                            code="SWARM_SERVICE_UPDATE_FAILED",
+                            recoverable=True,
+                            details={
+                                "service": service_name,
+                                "manager_deadline_exceeded": False,
+                                "update_attempts": 1,
+                                "observed_image": getattr(observed, "service_image", None),
+                                "observed_update_state": getattr(observed, "update_state", None),
+                                "observed_update_message": getattr(observed, "update_message", None),
+                            },
+                        ) from exc
+
             service.reload()
             observed = self.inspect_service(service_name)
             if observed is not None and observed.update_state in {
@@ -3060,31 +3249,30 @@ class SwarmRuntime:
                     },
                 )
             expected_image = observed.service_image if observed is not None else image_ref
-        except docker.errors.NotFound:
-            try:
-                service = self.client.services.create(image_ref, **kwargs)
-                service.reload()
-                observed = self.inspect_service(service_name)
-                expected_image = observed.service_image if observed is not None else image_ref
-            except docker.errors.APIError as exc:
-                raise DeploymentError(
-                    f"Unable to create Swarm service {service_name!r}: {exc}",
-                    stage="swarm_create",
-                    code="SWARM_SERVICE_CREATE_FAILED",
-                    recoverable=True,
-                ) from exc
+        except DeploymentError:
+            raise
         except docker.errors.APIError as exc:
             raise DeploymentError(
                 f"Unable to update Swarm service {service_name!r}: {exc}",
                 stage="swarm_update",
                 code="SWARM_SERVICE_UPDATE_FAILED",
                 recoverable=True,
+                details={
+                    "service": service_name,
+                    "manager_deadline_exceeded": _is_swarm_deadline_error(exc),
+                },
             ) from exc
-        return self.wait_ready(
+        finally:
+            self._last_apply_operation = dict(operation)
+
+        state = self.wait_ready(
             service_name,
             timeout=180,
             expected_image=expected_image,
         )
+        self.cleanup_stopped_task_containers(expected_service_id)
+        return state
+
 
     @staticmethod
     def _managed_service_labels(service) -> dict[str, str]:
@@ -3337,7 +3525,7 @@ class SwarmRuntime:
             float(getattr(config, "start_timeout", 45) or 45),
             float(getattr(config, "health_timeout", 60) or 60),
         )
-        return self.wait_ready(
+        state = self.wait_ready(
             name,
             timeout=startup_timeout,
             expected_image=expected_image,
@@ -3353,6 +3541,10 @@ class SwarmRuntime:
                 "process_name": contract.process_name,
             }),
         )
+        service_id = str((config.labels or {}).get("service.id") or "").strip()
+        if service_id:
+            self.cleanup_stopped_task_containers(service_id)
+        return state
 
     def scale_service(
         self,
