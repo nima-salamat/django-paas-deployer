@@ -23,7 +23,9 @@ from core.global_settings.config import (
 from deploy.models import DeploymentStatusChoices
 from plans.models import Plan
 from services.models import Service
-from services.api.runtime import start_service_apiview, stop_service_apiview
+from services.api.runtime import start_service_apiview, stop_service_apiview, restart_service_apiview
+from services.api.volume_files import purge_service_runtime_apiview
+from services.api.user_services import ServiceViewSet
 from users.models import User
 
 
@@ -225,6 +227,36 @@ class ReadyAppRuntimeControlTests(TestCase):
         self.assertEqual(start_response.data["code"], "catalog_service_managed")
         self.assertEqual(stop_response.status_code, 409)
         self.assertEqual(stop_response.data["code"], "catalog_service_managed")
+
+    def test_child_restart_and_runtime_purge_are_rejected(self):
+        from unittest.mock import patch
+
+        instance = self.install_wordpress("runtime-child-restart-guard")
+        service = instance.services.get(service_key="wordpress").service
+
+        with patch("services.api.runtime._get_service_for_user_or_share", return_value=(service, None)):
+            restart_response = restart_service_apiview(
+                self.request("POST", "/api/services/restart/", {"service_id": str(service.pk)})
+            )
+        with patch("services.api.common._get_service_for_user_or_share", return_value=(service, None)):
+            purge_response = purge_service_runtime_apiview(
+                self.request("POST", "/api/services/purge_service_runtime/", {"service_id": str(service.pk)})
+            )
+
+        self.assertEqual(restart_response.status_code, 409)
+        self.assertEqual(restart_response.data["code"], "catalog_service_managed")
+        self.assertEqual(purge_response.status_code, 409)
+        self.assertEqual(purge_response.data["code"], "catalog_service_managed")
+
+    def test_service_delete_api_requires_parent_application_cleanup(self):
+        instance = self.install_wordpress("runtime-child-delete-api-guard")
+        service = instance.services.get(service_key="wordpress").service
+        response = ServiceViewSet.as_view({"delete": "destroy"})(
+            self.request("DELETE", f"/api/services/{service.pk}/"),
+            pk=service.pk,
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "catalog_service_managed")
 
     def test_child_service_cannot_be_deleted_while_application_binding_exists(self):
         instance = self.install_wordpress("runtime-child-delete-guard")
