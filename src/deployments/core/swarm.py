@@ -18,6 +18,7 @@ import docker
 import yaml
 from django.conf import settings
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from deployments.common.docker_identity import canonical_remote_image_ref, canonical_swarm_service_name
 from deployments.common.exceptions import (
@@ -3092,6 +3093,30 @@ class SwarmRuntime:
         labels = spec.get("Labels") or {}
         return {str(key): str(value) for key, value in dict(labels).items()}
 
+    @staticmethod
+    def is_owned_service_labels(labels: Mapping[str, Any] | None, service_id: str) -> bool:
+        """Verify current and known legacy PassDeployer service ownership labels."""
+        values = {str(key): str(value) for key, value in dict(labels or {}).items()}
+        expected = str(service_id or "").strip()
+        managed_by = str(values.get("managed-by") or "").strip().lower()
+        owner = next(
+            (
+                str(values.get(key) or "").strip()
+                for key in (
+                    "passdeployer.service",
+                    "service.id",
+                    "io.passdeployer.service",
+                )
+                if str(values.get(key) or "").strip()
+            ),
+            "",
+        )
+        return bool(
+            expected
+            and managed_by in {"django-paas-deployer", "passdeployer"}
+            and owner == expected
+        )
+
     def _assert_service_owned(
         self,
         service,
@@ -3102,10 +3127,19 @@ class SwarmRuntime:
         if not expected:
             return
         labels = self._managed_service_labels(service)
-        if (
-            labels.get("managed-by") != "django-paas-deployer"
-            or labels.get("passdeployer.service") != expected
-        ):
+        if not self.is_owned_service_labels(labels, expected):
+            runtime_owner = next(
+                (
+                    labels.get(key)
+                    for key in (
+                        "passdeployer.service",
+                        "service.id",
+                        "io.passdeployer.service",
+                    )
+                    if labels.get(key)
+                ),
+                None,
+            )
             raise DeploymentError(
                 f"Refusing to mutate unowned Swarm service {getattr(service, 'name', '')!r}.",
                 stage="swarm_ownership",
@@ -3115,7 +3149,7 @@ class SwarmRuntime:
                     "service": str(getattr(service, "name", "") or ""),
                     "service_id": expected,
                     "managed_by": labels.get("managed-by"),
-                    "runtime_service_id": labels.get("passdeployer.service"),
+                    "runtime_service_id": runtime_owner,
                 },
             )
 
@@ -3541,16 +3575,35 @@ class SwarmRuntime:
             time.sleep(0.25)
 
     def service_names_for_service(self, service_id: str) -> list[str]:
-        names: list[str] = []
+        expected = str(service_id or "").strip()
+        if not expected:
+            return []
+        candidates: dict[str, Any] = {}
         try:
-            services = self.client.services.list(
-                filters={"label": f"passdeployer.service={service_id}"}
-            )
+            # Exact label filters discover legacy services without scanning
+            # unrelated Swarm services. Every result is owner-verified below.
+            for label_name in (
+                "passdeployer.service",
+                "service.id",
+                "io.passdeployer.service",
+            ):
+                services = self.client.services.list(
+                    filters={"label": f"{label_name}={expected}"}
+                )
+                for service in services:
+                    identity = str(
+                        getattr(service, "id", "")
+                        or getattr(service, "name", "")
+                    )
+                    if identity:
+                        candidates[identity] = service
+
             names = []
-            for service in services:
+            for service in candidates.values():
                 labels = self._managed_service_labels(service)
-                if labels.get("managed-by") == "django-paas-deployer" and labels.get("passdeployer.service") == str(service_id):
+                if self.is_owned_service_labels(labels, expected):
                     names.append(str(service.name))
+            return sorted(set(names))
         except docker.errors.DockerException as exc:
             raise DeploymentError(
                 f"Unable to enumerate Swarm services for service {service_id!r}.",
@@ -3558,13 +3611,129 @@ class SwarmRuntime:
                 code="SWARM_GROUP_INSPECTION_UNKNOWN",
                 recoverable=True,
                 details={
-                    "service_id": str(service_id),
+                    "service_id": expected,
                     "inspection": "UNKNOWN",
                     "error": str(exc),
                     "error_type": type(exc).__name__,
                 },
             ) from exc
-        return names
+
+    def cleanup_stopped_task_containers(
+        self,
+        service_id: str,
+        *,
+        min_age_seconds: float = 300.0,
+    ) -> dict[str, int]:
+        """Remove old exited containers only for terminal tasks of an owned service.
+
+        Swarm retains task history after a service update. A short grace period
+        preserves recent failure diagnostics, and the desired-state check
+        prevents deleting containers for tasks Swarm is still trying to run.
+        """
+        summary = {"seen": 0, "removed": 0, "skipped": 0, "failed": 0}
+        terminal_task_states = {
+            "complete", "failed", "shutdown", "rejected", "orphaned", "remove",
+        }
+        terminal_desired_states = {"shutdown", "remove"}
+        terminal_container_states = {"exited", "dead"}
+        age_limit = max(0.0, float(min_age_seconds))
+
+        try:
+            names = self.service_names_for_service(str(service_id))
+        except Exception:
+            logger.warning(
+                "Could not enumerate Swarm services for stopped-task cleanup service=%s.",
+                service_id,
+                exc_info=True,
+            )
+            summary["failed"] += 1
+            return summary
+
+        for name in names:
+            try:
+                service = self.client.services.get(_validate_service_name(name))
+                service.reload()
+                self._assert_service_owned(service, service_id=str(service_id))
+                tasks = service.tasks() or ()
+            except docker.errors.NotFound:
+                continue
+            except Exception:
+                logger.warning(
+                    "Could not inspect Swarm tasks for cleanup service=%s name=%s.",
+                    service_id,
+                    name,
+                    exc_info=True,
+                )
+                summary["failed"] += 1
+                continue
+
+            for task in tasks:
+                summary["seen"] += 1
+                status = task.get("Status") or {}
+                task_state = str(status.get("State") or "").strip().lower()
+                desired_state = str(
+                    task.get("DesiredState") or status.get("DesiredState") or ""
+                ).strip().lower()
+                if (
+                    task_state not in terminal_task_states
+                    or desired_state not in terminal_desired_states
+                ):
+                    summary["skipped"] += 1
+                    continue
+
+                updated_text = str(
+                    task.get("UpdatedAt") or status.get("Timestamp") or ""
+                ).strip()
+                updated_at = parse_datetime(updated_text) if updated_text else None
+                if updated_at is None:
+                    summary["skipped"] += 1
+                    continue
+                if timezone.is_naive(updated_at):
+                    updated_at = timezone.make_aware(
+                        updated_at,
+                        timezone.get_current_timezone(),
+                    )
+                age_seconds = (timezone.now() - updated_at).total_seconds()
+                if age_seconds < age_limit:
+                    summary["skipped"] += 1
+                    continue
+
+                container_id = str(
+                    (status.get("ContainerStatus") or {}).get("ContainerID") or ""
+                ).strip()
+                if not container_id:
+                    summary["skipped"] += 1
+                    continue
+
+                try:
+                    container = self.client.containers.get(container_id)
+                    container.reload()
+                    container_state = str(
+                        getattr(container, "status", "") or ""
+                    ).lower()
+                    if container_state not in terminal_container_states:
+                        summary["skipped"] += 1
+                        continue
+                    container.remove(force=True)
+                    summary["removed"] += 1
+                except docker.errors.NotFound:
+                    summary["skipped"] += 1
+                except docker.errors.DockerException:
+                    summary["failed"] += 1
+                    logger.warning(
+                        "Could not remove stopped task container %s for service=%s.",
+                        container_id,
+                        service_id,
+                        exc_info=True,
+                    )
+
+        if summary["removed"]:
+            logger.info(
+                "Removed %s stale stopped Swarm task container(s) for service=%s.",
+                summary["removed"],
+                service_id,
+            )
+        return summary
 
     def restart_service_group(self, service_id: str, *, timeout: float = 60.0) -> dict[str, SwarmServiceState]:
         """Restart every managed process service for one application in order."""
