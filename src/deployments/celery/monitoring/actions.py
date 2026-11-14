@@ -59,7 +59,15 @@ def _create_deploy_log(
 # ---------------------------------------------------------------------------
 
 @transaction.atomic
-def mark_service_running(service: Service, deploy: Deploy | None = None) -> bool:
+def mark_service_running(
+    service: Service,
+    deploy: Deploy | None = None,
+    *,
+    allow_runtime_reconciliation: bool = False,
+    expected_lifecycle_generation: int | None = None,
+    expected_active_revision_id: str | None = None,
+    expected_desired_state: str | None = None,
+) -> bool:
     locked = (
         Service.objects
         .select_for_update()
@@ -75,6 +83,11 @@ def mark_service_running(service: Service, deploy: Deploy | None = None) -> bool
         SERVICE_STATUS_CHOICES.SUCCEEDED,
         SERVICE_STATUS_CHOICES.RUNNING,
     )
+    if allow_runtime_reconciliation:
+        allowed += (
+            SERVICE_STATUS_CHOICES.FAILED,
+            SERVICE_STATUS_CHOICES.STOPPED,
+        )
     if locked.status not in allowed:
         return False
 
@@ -83,8 +96,17 @@ def mark_service_running(service: Service, deploy: Deploy | None = None) -> bool
 
     now = timezone.now()
     StateManager.transition_service(
-        service.pk, SERVICE_STATUS_CHOICES.RUNNING,
-        update_fields={"deployed_at": now, "deploy_started": None, "task_id": None},
+        service.pk,
+        SERVICE_STATUS_CHOICES.RUNNING,
+        update_fields={
+            "deployed_at": now,
+            "deploy_started": None,
+            "task_id": None,
+        },
+        allow_runtime_reconciliation=allow_runtime_reconciliation,
+        expected_lifecycle_generation=expected_lifecycle_generation,
+        expected_active_revision_id=expected_active_revision_id,
+        expected_desired_state=expected_desired_state,
     )
 
     logger.info("Service %s → running", service.pk)
@@ -97,7 +119,11 @@ def mark_service_running(service: Service, deploy: Deploy | None = None) -> bool
             level="info",
             event_type="deployment.monitor",
             progress=100,
-            details={"previous_status": locked.status, "new_status": "running"},
+            details={
+                "previous_status": locked.status,
+                "new_status": "running",
+                "runtime_reconciliation": allow_runtime_reconciliation,
+            },
         )
     return True
 
