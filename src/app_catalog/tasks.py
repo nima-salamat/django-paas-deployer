@@ -290,6 +290,19 @@ def _finish_application_stop(
             "status", "stage", "runtime_operation", "error_code",
             "error_message", "updated_at",
         ])
+        if failed_service_key and failed_service_key != "application":
+            failed_service_id = (
+                ApplicationInstanceService.objects
+                .filter(instance_id=owner.pk, service_key=failed_service_key)
+                .values_list("service_id", flat=True)
+                .first()
+            )
+            if failed_service_id:
+                Service.objects.filter(
+                    pk=failed_service_id,
+                    status=SERVICE_STATUS_CHOICES.STOPPING,
+                    desired_state="stopped",
+                ).update(deploy_started=None)
         return True
 
 
