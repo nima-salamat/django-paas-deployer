@@ -285,7 +285,7 @@ class ApplicationStackExecutor:
         deadline = now + timedelta(minutes=self._timeout_minutes())
         with transaction.atomic():
             instance = ApplicationInstance.objects.select_for_update().get(pk=self.instance_id)
-            if instance.status in {ApplicationStatus.RUNNING, ApplicationStatus.FAILED, ApplicationStatus.CANCELLED}:
+            if instance.status in {ApplicationStatus.RUNNING, ApplicationStatus.STOPPING, ApplicationStatus.FAILED, ApplicationStatus.CANCELLED} or instance.runtime_operation:
                 return False
             if instance.cancel_requested or instance.stage == "deletion_pending":
                 return False
@@ -310,7 +310,7 @@ class ApplicationStackExecutor:
     def cancel(self, *, reason: str = "Application deployment cancelled.") -> None:
         with transaction.atomic():
             instance = ApplicationInstance.objects.select_for_update().get(pk=self.instance_id)
-            if instance.status in {ApplicationStatus.RUNNING, ApplicationStatus.FAILED}:
+            if instance.status in {ApplicationStatus.RUNNING, ApplicationStatus.STOPPING, ApplicationStatus.FAILED}:
                 return
 
             # Cancellation is intentionally idempotent even after the parent
@@ -851,11 +851,17 @@ class ApplicationStackExecutor:
             if failed:
                 first = failed[0]
                 message = first.deploy.error_message or first.deploy.status_message or "Service deployment did not complete."
-                locked.status = ApplicationStatus.FAILED
-                locked.stage = "service_failed"
-                locked.error_code = "APPLICATION_SERVICE_DEPLOYMENT_FAILED"
+                runtime_start = locked.runtime_operation == "start"
+                locked.status = ApplicationStatus.DEGRADED if runtime_start else ApplicationStatus.FAILED
+                locked.stage = "runtime_start_failed" if runtime_start else "service_failed"
+                locked.error_code = "APPLICATION_RUNTIME_START_FAILED" if runtime_start else "APPLICATION_SERVICE_DEPLOYMENT_FAILED"
                 locked.error_message = f"{first.service_key}: {message}"
-                locked.save(update_fields=["status", "stage", "error_code", "error_message", "updated_at"])
+                if runtime_start:
+                    locked.runtime_operation = ""
+                locked.save(update_fields=[
+                    "status", "stage", "runtime_operation", "error_code",
+                    "error_message", "updated_at",
+                ])
                 for binding in bindings:
                     if binding.deploy.status == DeploymentStatusChoices.PENDING:
                         StateManager.transition_deploy_system_terminal(
@@ -922,7 +928,11 @@ class ApplicationStackExecutor:
                 locked.error_code = ""
                 locked.error_message = ""
                 locked.deployed_at = timezone.now()
-                locked.save(update_fields=["status", "stage", "error_code", "error_message", "deployed_at", "updated_at"])
+                locked.runtime_operation = ""
+                locked.save(update_fields=[
+                    "status", "stage", "runtime_operation", "error_code",
+                    "error_message", "deployed_at", "updated_at",
+                ])
                 return True
             return False
 
