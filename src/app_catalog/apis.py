@@ -404,7 +404,7 @@ class ApplicationInstanceStartAPIView(CatalogPermissionMixin, APIView):
                     service.status = SERVICE_STATUS_CHOICES.QUEUED
                     service.desired_state = "running"
                     service.lifecycle_generation = generation
-                    service.task_id = None
+                    service.task_id = ""
                     service.deploy_started = now
                     service.save(update_fields=[
                         "status", "desired_state", "lifecycle_generation",
