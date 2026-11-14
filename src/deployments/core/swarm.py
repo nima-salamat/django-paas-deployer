@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 import re
 import time
 from dataclasses import dataclass, field
@@ -103,14 +104,24 @@ def _external_service_matches(
         for key, value in dict(labels or {}).items()
     )
     expected_env = {
-        str(key) + "=" + str(value)
+        str(key): str(value)
         for key, value in dict(environment or {}).items()
     }
-    actual_env = {
-        str(item)
-        for item in (container_spec.get("Env") or ())
-    }
-    return bool(image_matches and labels_match and actual_env == expected_env)
+    actual_env = {}
+    for item in container_spec.get("Env") or ():
+        key, separator, value = str(item).partition("=")
+        if separator:
+            actual_env[key] = value
+    # Docker may inject PATH when the caller does not explicitly set it.
+    # Ignore only that daemon-added default; all caller-provided variables
+    # must match exactly before we treat an API timeout as a committed update.
+    if "PATH" not in expected_env:
+        actual_env.pop("PATH", None)
+    env_matches = all(
+        actual_env.get(key) == value
+        for key, value in expected_env.items()
+    ) and not (set(actual_env) - set(expected_env) - {"PATH"})
+    return bool(image_matches and labels_match and env_matches)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
