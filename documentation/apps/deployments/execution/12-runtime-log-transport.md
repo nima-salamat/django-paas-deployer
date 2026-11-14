@@ -4,7 +4,7 @@
 
 PassDeployer uses **Fluent Bit** as the runtime log transport for Docker Swarm workloads.
 
-The Docker Engine Fluentd logging driver forwards stdout/stderr over a host-local Unix domain socket. One Fluent Bit agent runs on each Docker node, batches the records and forwards them over a private Docker network to the Django ingestion endpoint. Django remains responsible for ownership validation, redaction, retention, quotas, durable storage, query APIs and WebSocket fan-out.
+The Docker Engine Fluentd logging driver forwards stdout/stderr over a host-local Unix domain socket. In single-node Compose mode, Fluent Bit uses host networking and sends to Django through the loopback-only published endpoint (`127.0.0.1:8020`), avoiding local overlay DNS/VXLAN dependencies. In optional multi-node Swarm mode, one Fluent Bit agent runs on each Docker node and forwards records over the private attachable overlay to `deploy-web:8000`. Django remains responsible for ownership validation, redaction, retention, quotas, durable storage, query APIs and WebSocket fan-out.
 
 This avoids a Python thread and Docker log-follow connection for every application task. The Fluent Bit agent is bounded by default to 128 MiB RAM, 0.50 CPU, 32 MiB in-memory chunks and 512 MiB of filesystem buffering. Each task uses Docker's asynchronous, bounded, non-blocking logging mode so a stalled log backend does not block application stdout/stderr.
 
