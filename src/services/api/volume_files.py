@@ -487,6 +487,16 @@ def purge_service_runtime_apiview(request):
         except Service.DoesNotExist:
             return Response({"result": "error", "detail": _("Service not found.")}, status=status.HTTP_404_NOT_FOUND)
         service = Service.objects.select_related("plan").get(pk=service.pk)
+        from app_catalog.models import ApplicationInstanceService
+        if ApplicationInstanceService.objects.filter(service_id=service.pk).exists():
+            return Response(
+                {
+                    "result": "error",
+                    "code": "catalog_service_managed",
+                    "detail": _("This service is managed by a Ready App. Stop or delete the parent application instead."),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
     except Service.DoesNotExist:
         return Response(
             {"result": "error", "detail": _("Service not found.")},
