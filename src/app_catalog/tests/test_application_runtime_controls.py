@@ -80,7 +80,7 @@ class ReadyAppRuntimeControlTests(TestCase):
             Service.objects.filter(pk=binding.service_id).update(
                 status=status,
                 desired_state=desired_state,
-                task_id=None,
+                task_id="",
                 deploy_started=None,
             )
             type(binding.deploy).objects.filter(pk=binding.deploy_id).update(
