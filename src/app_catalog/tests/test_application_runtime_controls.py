@@ -130,6 +130,34 @@ class ReadyAppRuntimeControlTests(TestCase):
                 binding.service.lifecycle_generation,
             )
 
+    def test_start_all_rejects_stopped_parent_with_unstopped_child(self):
+        instance = self.install_wordpress("runtime-start-stale-parent")
+        self.set_children(
+            instance,
+            status=SERVICE_STATUS_CHOICES.STOPPED,
+            desired_state="stopped",
+            deploy_status=DeploymentStatusChoices.SUCCEEDED,
+        )
+        child = instance.services.get(service_key="wordpress").service
+        Service.objects.filter(pk=child.pk).update(
+            status=SERVICE_STATUS_CHOICES.RUNNING,
+            desired_state="running",
+        )
+        ApplicationInstance.objects.filter(pk=instance.pk).update(
+            status=ApplicationStatus.STOPPED,
+            stage="application_stopped",
+        )
+
+        with patch("app_catalog.apis.start_application_runtime.delay") as enqueue:
+            response = ApplicationInstanceStartAPIView.as_view()(
+                self.request("POST", f"/api/application-catalog/installations/{instance.pk}/start/"),
+                pk=instance.pk,
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "application_stop_before_restart")
+        enqueue.assert_not_called()
+
     def test_start_all_requires_stop_all_after_a_degraded_runtime(self):
         instance = self.install_wordpress("runtime-start-degraded-guard")
         self.set_children(
