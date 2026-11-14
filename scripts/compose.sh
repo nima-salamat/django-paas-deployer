@@ -18,6 +18,15 @@ dotenv_value() {
             if (name == wanted) {
                 value = substr($0, index($0, "=") + 1)
                 sub(/\r$/, "", value)
+                # Match Compose .env quoting: single-quoted values are literal.
+                if (length(value) >= 2 && substr(value, 1, 1) == "'" && substr(value, length(value), 1) == "'") {
+                    value = substr(value, 2, length(value) - 2)
+                } else if (length(value) >= 2 && substr(value, 1, 1) == "\"" && substr(value, length(value), 1) == "\"") {
+                    value = substr(value, 2, length(value) - 2)
+                    gsub(/\\n/, "\n", value)
+                    gsub(/\\r/, "\r", value)
+                    gsub(/\\t/, "\t", value)
+                }
                 found = 1
             }
         }
@@ -154,6 +163,91 @@ preflight_matrix_postgres_network() {
     export MATRIX_DOCKER_NETWORK
 }
 
+# Prepare the shared reverse-proxy network before Compose creates containers.
+# Swarm workloads require an attachable overlay; the standalone Docker runtime
+# uses a regular bridge. Keeping this network external preserves it across
+# Compose down/up cycles because deployed workloads also depend on it.
+prepare_proxy_network() {
+    compose_command=
+    for arg in "$@"; do
+        case "$arg" in
+            up|start|restart|create|run)
+                compose_command=$arg
+                break
+                ;;
+        esac
+    done
+    [ -n "$compose_command" ] || return 0
+
+    SWARM_ENABLED=$(setting SWARM_ENABLED)
+    : "${SWARM_ENABLED:=1}"
+    swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)
+    case "$(printf '%s' "$SWARM_ENABLED" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on)
+            if [ "$swarm_state" != active ]; then
+                echo "ERROR: SWARM_ENABLED is enabled but this Docker node is not an active Swarm node (state=$swarm_state)." >&2
+                echo "Restore Swarm manager availability or set SWARM_ENABLED=0 to use the standalone Docker runtime." >&2
+                return 2
+            fi
+            swarm_manager=$(docker info --format '{{.Swarm.ControlAvailable}}' 2>/dev/null || true)
+            if [ "$swarm_manager" != true ]; then
+                echo "ERROR: SWARM_ENABLED is enabled but this Docker node is not a Swarm manager." >&2
+                echo "Run ./scripts/compose.sh on an active Swarm manager." >&2
+                return 2
+            fi
+            expected_driver=overlay
+            expected_scope=swarm
+            ;;
+        0|false|no|off)
+            expected_driver=bridge
+            expected_scope=local
+            ;;
+        *)
+            echo "ERROR: SWARM_ENABLED must be 0/1, true/false, yes/no, or on/off." >&2
+            return 2
+            ;;
+    esac
+
+    if ! docker network inspect proxy_net >/dev/null 2>&1; then
+        if [ "$expected_driver" = overlay ]; then
+            create_error=$(docker network create --driver overlay --attachable proxy_net 2>&1) || {
+                if ! docker network inspect proxy_net >/dev/null 2>&1; then
+                    echo "ERROR: Could not create the shared proxy_net overlay network." >&2
+                    printf '%s\n' "$create_error" >&2
+                    echo "Check Docker Swarm manager health and overlay/VXLAN connectivity before retrying." >&2
+                    return 2
+                fi
+            }
+        else
+            create_error=$(docker network create --driver bridge proxy_net 2>&1) || {
+                if ! docker network inspect proxy_net >/dev/null 2>&1; then
+                    echo "ERROR: Could not create the shared proxy_net bridge network." >&2
+                    printf '%s\n' "$create_error" >&2
+                    return 2
+                fi
+            }
+        fi
+    fi
+
+    actual_driver=$(docker network inspect --format '{{.Driver}}' proxy_net 2>/dev/null || true)
+    actual_scope=$(docker network inspect --format '{{.Scope}}' proxy_net 2>/dev/null || true)
+    is_internal=$(docker network inspect --format '{{.Internal}}' proxy_net 2>/dev/null || true)
+    if [ "$actual_driver" != "$expected_driver" ] || [ "$actual_scope" != "$expected_scope" ] || [ "$is_internal" != false ]; then
+        echo "ERROR: proxy_net is incompatible with the selected runtime (driver=$actual_driver scope=$actual_scope internal=$is_internal; expected driver=$expected_driver scope=$expected_scope internal=false)." >&2
+        echo "The network is shared with deployed applications and will not be removed automatically. Inspect it with: docker network inspect proxy_net" >&2
+        return 2
+    fi
+
+    if [ "$expected_driver" = overlay ]; then
+        attachable=$(docker network inspect --format '{{.Attachable}}' proxy_net 2>/dev/null || true)
+        [ "$attachable" = true ] || {
+            echo "ERROR: proxy_net is an overlay network but is not attachable." >&2
+            echo "Because deployed applications may use this network, recreate it only after safely moving/removing its attached workloads." >&2
+            return 2
+        }
+    fi
+}
+
 # Prepare the external runtime-log network for Compose. Swarm uses an
 # attachable overlay; standalone Docker uses an internal bridge. The web
 # service always references this external network, even when collection is off.
@@ -180,18 +274,15 @@ prepare_runtime_log_ingestion() {
     : "${SWARM_ENABLED:=1}"
     swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)
 
-    case "$swarm_state" in
-        active) expected_driver=overlay ;;
-        *) expected_driver=bridge ;;
-    esac
-
     case "$(printf '%s' "$SWARM_ENABLED" | tr '[:upper:]' '[:lower:]'):$swarm_state" in
-        1:active|true:active|yes:active|on:active)
+        1:active|true:active|yes:active|on)
             runtime_mode=swarm
+            expected_driver=overlay
             profile=runtime-logs
             ;;
         *)
             runtime_mode=docker
+            expected_driver=bridge
             profile=docker-logs
             ;;
     esac
@@ -304,6 +395,7 @@ prepare_runtime_log_ingestion() {
     sh "$SCRIPT_DIR/prepare-log-node.sh" "$LOG_FORWARD_SOCKET_DIR"
 }
 
+prepare_proxy_network "$@" || exit $?
 prepare_runtime_log_ingestion "$@" || exit $?
 
 USE_MATRIX_POSTGRES=$(setting USE_MATRIX_POSTGRES)
