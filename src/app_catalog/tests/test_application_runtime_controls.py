@@ -179,6 +179,31 @@ class ReadyAppRuntimeControlTests(TestCase):
         self.assertEqual(instance.stage, "stopping_services")
         enqueue.assert_called_once_with(str(instance.pk), instance.runtime_operation_generation)
 
+    def test_stop_all_can_reconcile_a_stopped_parent_with_failed_child(self):
+        instance = self.install_wordpress("runtime-stop-stale-parent")
+        self.set_children(
+            instance,
+            status=SERVICE_STATUS_CHOICES.FAILED,
+            desired_state="running",
+            deploy_status=DeploymentStatusChoices.FAILED,
+        )
+        ApplicationInstance.objects.filter(pk=instance.pk).update(
+            status=ApplicationStatus.STOPPED,
+            stage="application_stopped",
+        )
+
+        with patch("app_catalog.apis.stop_application_runtime.delay") as enqueue:
+            response = ApplicationInstanceStopAPIView.as_view()(
+                self.request("POST", f"/api/application-catalog/installations/{instance.pk}/stop/"),
+                pk=instance.pk,
+            )
+
+        self.assertEqual(response.status_code, 202)
+        instance.refresh_from_db()
+        self.assertEqual(instance.status, ApplicationStatus.STOPPING)
+        self.assertEqual(instance.runtime_operation, "stop")
+        enqueue.assert_called_once_with(str(instance.pk), instance.runtime_operation_generation)
+
     def test_stop_all_stops_dependents_before_their_dependencies(self):
         instance = self.install_wordpress("runtime-stop-order")
         self.set_children(
