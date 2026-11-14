@@ -229,6 +229,17 @@ def start_service_apiview(request):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
+            from app_catalog.models import ApplicationInstanceService
+            if ApplicationInstanceService.objects.filter(service_id=service_item.pk).exists():
+                return Response(
+                    {
+                        "result": "error",
+                        "code": "catalog_service_managed",
+                        "detail": _("This service is managed by a Ready App. Use Start All or Stop All on the parent application."),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
             # Older stop workers could mark a Service FAILED even when its
             # Swarm tasks kept running. Reconcile those legacy projections
             # before deciding to create another deployment.
@@ -616,6 +627,17 @@ def stop_service_apiview(request):
                 return Response(
                     {"result": "error", "detail": _("Service not found.")},
                     status=status.HTTP_404_NOT_FOUND,
+                )
+
+            from app_catalog.models import ApplicationInstanceService
+            if ApplicationInstanceService.objects.filter(service_id=service_item.pk).exists():
+                return Response(
+                    {
+                        "result": "error",
+                        "code": "catalog_service_managed",
+                        "detail": _("This service is managed by a Ready App. Use Start All or Stop All on the parent application."),
+                    },
+                    status=status.HTTP_409_CONFLICT,
                 )
 
             if (
