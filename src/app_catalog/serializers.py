@@ -351,6 +351,7 @@ class ApplicationInstanceSerializer(serializers.ModelSerializer):
                 "service_host": service_host,
                 "deploy_id": str(deploy.pk),
                 "status": service.status,
+                "desired_state": service.desired_state,
                 "deploy_status": deploy.status,
                 "stage": deploy.stage,
                 "status_message": deploy.status_message,
