@@ -1129,6 +1129,17 @@ def restart_service_apiview(request):
             except Service.DoesNotExist:
                 return Response({"result": "error", "detail": _("Service not found.")}, status=status.HTTP_404_NOT_FOUND)
 
+            from app_catalog.models import ApplicationInstanceService
+            if ApplicationInstanceService.objects.filter(service_id=service_item.pk).exists():
+                return Response(
+                    {
+                        "result": "error",
+                        "code": "catalog_service_managed",
+                        "detail": _("This service is managed by a Ready App. Use Start All or Stop All on the parent application."),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
             if service_item.status in (
                 SERVICE_STATUS_CHOICES.QUEUED,
                 SERVICE_STATUS_CHOICES.DEPLOYING,
