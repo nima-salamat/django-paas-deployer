@@ -825,7 +825,7 @@ class SwarmRuntimeCleanupTests(unittest.TestCase):
 
         runtime.remove_service_group("svc-1")
 
-        runtime.remove.assert_called_once_with("demo")
+        runtime.remove.assert_called_once_with("demo", service_id="svc-1")
         container.remove.assert_called_once_with(force=True)
 
 
