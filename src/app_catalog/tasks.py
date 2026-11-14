@@ -8,8 +8,11 @@ from django.db import transaction
 from django.utils import timezone
 from datetime import timedelta
 
-from deployments.celery.tasks import deploy as deploy_task, run_db_deploy
+from deployments.celery.tasks import deploy as deploy_task, run_db_deploy, stop as stop_service_task
 from deployments.core.db_deployer import DB_PLATFORMS
+from core.global_settings.config import SERVICE_STATUS_CHOICES
+from services.models import Service
+from services.lifecycle import bump_lifecycle
 from deployments.common.exceptions import to_deployment_error
 from deploy.models import DeploymentStatusChoices
 from .models import ApplicationInstance, ApplicationInstanceService, ApplicationStatus
@@ -31,22 +34,31 @@ def _mark_instance_failed(instance_id, message: str, code: str = "APPLICATION_DE
         return True
 
 
-def _schedule_next(instance_id: str, current_key: str | None = None):
-    """Reconcile the application DAG and dispatch every currently-ready service."""
+def _schedule_next(
+    instance_id: str,
+    current_key: str | None = None,
+    runtime_operation_generation: int | None = None,
+):
+    """Reconcile the immutable application DAG and dispatch its ready frontier."""
     executor = ApplicationStackExecutor(instance_id)
     dispatches = executor.reconcile()
     for dispatch in dispatches:
         try:
-            callback = advance_application_service.si(
+            callback_args = (
                 dispatch.instance_id,
                 dispatch.service_key,
                 dispatch.task_id,
             )
-            failure = application_service_failed.si(
-                dispatch.instance_id,
-                dispatch.service_key,
-                dispatch.task_id,
-            )
+            if runtime_operation_generation is None:
+                callback = advance_application_service.si(*callback_args)
+                failure = application_service_failed.si(*callback_args)
+            else:
+                callback = advance_application_service.si(
+                    *callback_args, int(runtime_operation_generation)
+                )
+                failure = application_service_failed.si(
+                    *callback_args, int(runtime_operation_generation)
+                )
             # Database services have a dedicated deployment worker.
             # Dispatch them directly so the application callback/errback stays
             # attached to the actual execution task instead of being lost by
@@ -164,27 +176,334 @@ def gate_application_service(self, instance_id: str, service_key: str):
 
 
 @shared_task(name="app_catalog.advance_application_service")
-def advance_application_service(instance_id: str, service_key: str, child_task_id: str | None = None):
+def advance_application_service(
+    instance_id: str,
+    service_key: str,
+    child_task_id: str | None = None,
+    runtime_operation_generation: int | None = None,
+):
     with transaction.atomic():
+        if runtime_operation_generation is not None:
+            owner = ApplicationInstance.objects.select_for_update().filter(pk=instance_id).first()
+            if (
+                owner is None
+                or owner.status != ApplicationStatus.DEPLOYING
+                or owner.runtime_operation != "start"
+                or int(owner.runtime_operation_generation or 0) != int(runtime_operation_generation)
+            ):
+                return
         binding = ApplicationInstanceService.objects.select_for_update().filter(instance_id=instance_id, service_key=service_key).first()
         if not binding or (child_task_id and binding.dispatch_task_id != child_task_id):
             return
         binding.dispatched_at = None
         binding.dispatch_task_id = ""
         binding.save(update_fields=["dispatched_at", "dispatch_task_id"])
-    _schedule_next(instance_id, current_key=service_key)
+    _schedule_next(
+        instance_id,
+        current_key=service_key,
+        runtime_operation_generation=runtime_operation_generation,
+    )
 
 
 @shared_task(name="app_catalog.application_service_failed")
-def application_service_failed(instance_id: str, service_key: str, child_task_id: str | None = None, *args, **kwargs):
+def application_service_failed(
+    instance_id: str,
+    service_key: str,
+    child_task_id: str | None = None,
+    runtime_operation_generation: int | None = None,
+    *args,
+    **kwargs,
+):
     with transaction.atomic():
+        if runtime_operation_generation is not None:
+            owner = ApplicationInstance.objects.select_for_update().filter(pk=instance_id).first()
+            if (
+                owner is None
+                or owner.status != ApplicationStatus.DEPLOYING
+                or owner.runtime_operation != "start"
+                or int(owner.runtime_operation_generation or 0) != int(runtime_operation_generation)
+            ):
+                return
         binding = ApplicationInstanceService.objects.select_for_update().filter(instance_id=instance_id, service_key=service_key).first()
         if not binding or (child_task_id and binding.dispatch_task_id != child_task_id):
             return
         binding.dispatched_at = None
         binding.dispatch_task_id = ""
         binding.save(update_fields=["dispatched_at", "dispatch_task_id"])
-    _schedule_next(instance_id, current_key=service_key)
+    _schedule_next(
+        instance_id,
+        current_key=service_key,
+        runtime_operation_generation=runtime_operation_generation,
+    )
+
+
+@shared_task(bind=True, name="app_catalog.start_application_runtime")
+def start_application_runtime(self, instance_id: str, runtime_operation_generation: int):
+    """Resume Start All using the existing dependency-aware install scheduler."""
+    owner = ApplicationInstance.objects.filter(
+        pk=instance_id,
+        status=ApplicationStatus.DEPLOYING,
+        runtime_operation="start",
+        runtime_operation_generation=int(runtime_operation_generation),
+        stage="starting_services",
+    ).first()
+    if owner is None:
+        return {"started": False, "reason": "stale_operation"}
+    _schedule_next(
+        str(instance_id),
+        runtime_operation_generation=int(runtime_operation_generation),
+    )
+    return {"started": True}
+
+
+def _finish_application_stop(
+    instance_id: str,
+    runtime_operation_generation: int,
+    *,
+    failed_service_key: str | None = None,
+    message: str = "",
+) -> bool:
+    with transaction.atomic():
+        owner = ApplicationInstance.objects.select_for_update().filter(pk=instance_id).first()
+        if (
+            owner is None
+            or owner.status != ApplicationStatus.STOPPING
+            or owner.runtime_operation != "stop"
+            or int(owner.runtime_operation_generation or 0) != int(runtime_operation_generation)
+        ):
+            return False
+        if failed_service_key:
+            owner.status = ApplicationStatus.DEGRADED
+            owner.stage = "runtime_stop_failed"
+            owner.error_code = "APPLICATION_RUNTIME_STOP_FAILED"
+            owner.error_message = message or (
+                f"Could not confirm that application service '{failed_service_key}' stopped. "
+                "Its dependencies were left running."
+            )
+        else:
+            owner.status = ApplicationStatus.STOPPED
+            owner.stage = "application_stopped"
+            owner.error_code = ""
+            owner.error_message = ""
+        owner.runtime_operation = ""
+        owner.save(update_fields=[
+            "status", "stage", "runtime_operation", "error_code",
+            "error_message", "updated_at",
+        ])
+        return True
+
+
+def _continue_application_stop(
+    instance_id: str,
+    runtime_operation_generation: int,
+) -> dict[str, object]:
+    """Stop one service at a time in reverse dependency order."""
+    try:
+        _instance, plan = ApplicationStackExecutor(str(instance_id))._load()
+        stop_order = tuple(reversed(plan.topological_order()))
+    except Exception as exc:
+        _finish_application_stop(
+            str(instance_id),
+            int(runtime_operation_generation),
+            failed_service_key="application",
+            message=f"Application dependency graph could not be loaded for Stop All: {exc}",
+        )
+        return {"stopped": False, "reason": "invalid_graph"}
+
+    stale_seconds = 300
+    try:
+        from django.conf import settings
+        stale_seconds = max(60, int(getattr(settings, "CATALOG_DISPATCH_STALE_SECONDS", 300)))
+    except Exception:
+        pass
+
+    for service_key in stop_order:
+        task_data = None
+        with transaction.atomic():
+            owner = ApplicationInstance.objects.select_for_update().filter(pk=instance_id).first()
+            if (
+                owner is None
+                or owner.stage == "deletion_pending"
+                or owner.status != ApplicationStatus.STOPPING
+                or owner.runtime_operation != "stop"
+                or int(owner.runtime_operation_generation or 0) != int(runtime_operation_generation)
+            ):
+                return {"stopped": False, "reason": "stale_operation"}
+
+            binding = (
+                ApplicationInstanceService.objects.select_for_update()
+                .filter(instance_id=instance_id, service_key=service_key)
+                .first()
+            )
+            if binding is None:
+                task_data = {"failed": True, "message": f"Application service binding '{service_key}' is missing."}
+            else:
+                service = Service.objects.select_for_update().filter(pk=binding.service_id).first()
+                if service is None:
+                    task_data = {"failed": True, "message": f"Application service '{service_key}' no longer exists."}
+                else:
+                    service_status = str(service.status or "").lower()
+                    desired_state = str(service.desired_state or "").lower()
+                    stopped_status = str(SERVICE_STATUS_CHOICES.STOPPED).lower()
+                    stopping_status = str(SERVICE_STATUS_CHOICES.STOPPING).lower()
+                    if service_status == stopped_status and desired_state == "stopped":
+                        continue
+                    if service_status in {
+                        str(SERVICE_STATUS_CHOICES.QUEUED).lower(),
+                        str(SERVICE_STATUS_CHOICES.DEPLOYING).lower(),
+                    }:
+                        task_data = {
+                            "failed": True,
+                            "message": (
+                                f"Cannot safely continue Stop All because dependent service '{service_key}' "
+                                f"is still {service_status}."
+                            ),
+                        }
+                    else:
+                        now = timezone.now()
+                        already_stopping = service_status == stopping_status and desired_state == "stopped"
+                        if already_stopping:
+                            age = (
+                                (now - service.deploy_started).total_seconds()
+                                if service.deploy_started else stale_seconds + 1
+                            )
+                            if age < stale_seconds:
+                                return {
+                                    "stopped": False,
+                                    "reason": "child_stop_in_progress",
+                                    "service": service_key,
+                                }
+                            lifecycle_generation = int(service.lifecycle_generation or 0)
+                            task_id = str(service.task_id or uuid.uuid4())
+                        else:
+                            lifecycle_generation = bump_lifecycle(service.pk, desired_state="stopped")
+                            task_id = str(uuid.uuid4())
+                            service.status = SERVICE_STATUS_CHOICES.STOPPING
+                            service.desired_state = "stopped"
+                            service.lifecycle_generation = lifecycle_generation
+                            service.task_id = task_id
+                            service.deploy_started = now
+                            service.save(update_fields=[
+                                "status", "desired_state", "lifecycle_generation",
+                                "task_id", "deploy_started",
+                            ])
+                        task_data = {
+                            "service_id": str(service.pk),
+                            "service_key": service_key,
+                            "lifecycle_generation": lifecycle_generation,
+                            "task_id": task_id,
+                        }
+
+        if task_data and task_data.get("failed"):
+            _finish_application_stop(
+                str(instance_id),
+                int(runtime_operation_generation),
+                failed_service_key=service_key,
+                message=str(task_data.get("message") or ""),
+            )
+            return {"stopped": False, "reason": "child_stop_precondition_failed"}
+
+        if task_data:
+            try:
+                stop_service_task.apply_async(
+                    args=[task_data["service_id"]],
+                    kwargs={
+                        "expected_lifecycle_generation": task_data["lifecycle_generation"],
+                    },
+                    task_id=task_data["task_id"],
+                    link=advance_application_stop.si(
+                        str(instance_id), service_key, int(runtime_operation_generation)
+                    ),
+                    link_error=application_stop_failed.si(
+                        str(instance_id), service_key, int(runtime_operation_generation)
+                    ),
+                    queue="deployments",
+                )
+            except Exception:
+                logger.exception(
+                    "Unable to queue Stop All child service %s/%s",
+                    instance_id,
+                    service_key,
+                )
+                Service.objects.filter(
+                    pk=task_data["service_id"],
+                    lifecycle_generation=task_data["lifecycle_generation"],
+                    task_id=task_data["task_id"],
+                ).update(deploy_started=None)
+            return {
+                "stopped": False,
+                "dispatched": service_key,
+                "task_id": task_data["task_id"],
+            }
+
+    _finish_application_stop(str(instance_id), int(runtime_operation_generation))
+    return {"stopped": True}
+
+
+@shared_task(bind=True, name="app_catalog.stop_application_runtime")
+def stop_application_runtime(self, instance_id: str, runtime_operation_generation: int):
+    """Begin or resume the reverse dependency-order Stop All coordinator."""
+    return _continue_application_stop(
+        str(instance_id),
+        int(runtime_operation_generation),
+    )
+
+
+@shared_task(name="app_catalog.advance_application_stop")
+def advance_application_stop(
+    instance_id: str,
+    service_key: str,
+    runtime_operation_generation: int,
+):
+    owner = ApplicationInstance.objects.filter(
+        pk=instance_id,
+        status=ApplicationStatus.STOPPING,
+        runtime_operation="stop",
+        runtime_operation_generation=int(runtime_operation_generation),
+    ).first()
+    if owner is None:
+        return {"advanced": False, "reason": "stale_operation"}
+
+    binding = ApplicationInstanceService.objects.select_related("service").filter(
+        instance_id=instance_id,
+        service_key=service_key,
+    ).first()
+    if (
+        binding is None
+        or str(binding.service.status or "").lower() != str(SERVICE_STATUS_CHOICES.STOPPED).lower()
+        or str(binding.service.desired_state or "").lower() != "stopped"
+    ):
+        _finish_application_stop(
+            str(instance_id),
+            int(runtime_operation_generation),
+            failed_service_key=service_key,
+        )
+        return {"advanced": False, "reason": "stop_not_confirmed"}
+
+    return _continue_application_stop(
+        str(instance_id),
+        int(runtime_operation_generation),
+    )
+
+
+@shared_task(name="app_catalog.application_stop_failed")
+def application_stop_failed(
+    instance_id: str,
+    service_key: str,
+    runtime_operation_generation: int,
+    *args,
+    **kwargs,
+):
+    _finish_application_stop(
+        str(instance_id),
+        int(runtime_operation_generation),
+        failed_service_key=service_key,
+    )
+    logger.error(
+        "Ready App Stop All stopped at service %s/%s; dependency services remain running.",
+        instance_id,
+        service_key,
+    )
 
 
 @shared_task(name="app_catalog.supervise_ready_applications")
@@ -356,6 +675,7 @@ def reconcile_application_installations():
             ApplicationStatus.PENDING,
             ApplicationStatus.DEPLOYING,
             ApplicationStatus.RUNNING,
+            ApplicationStatus.STOPPING,
             ApplicationStatus.CANCELLED,
         ),
         cancel_requested__in=(False, True),
@@ -372,6 +692,9 @@ def reconcile_application_installations():
             ApplicationStatus.PENDING,
             ApplicationStatus.DEPLOYING,
             ApplicationStatus.RUNNING,
+            ApplicationStatus.STOPPING,
+            ApplicationStatus.STOPPED,
+            ApplicationStatus.DEGRADED,
             ApplicationStatus.FAILED,
             ApplicationStatus.CANCELLED,
         ),
@@ -430,10 +753,24 @@ def reconcile_application_installations():
             # missing start task first rather than dispatching child services
             # without a coordinator owner.
             fresh = ApplicationInstance.objects.only(
-                "status", "cancel_requested", "execution_task_id", "stage"
+                "status", "cancel_requested", "execution_task_id", "stage",
+                "runtime_operation", "runtime_operation_generation",
             ).get(pk=instance.pk)
             if fresh.status == ApplicationStatus.DEPLOYING:
-                _schedule_next(str(instance.pk))
+                runtime_generation = (
+                    int(fresh.runtime_operation_generation or 0)
+                    if fresh.runtime_operation == "start"
+                    else None
+                )
+                _schedule_next(
+                    str(instance.pk),
+                    runtime_operation_generation=runtime_generation,
+                )
+            elif fresh.status == ApplicationStatus.STOPPING and fresh.runtime_operation == "stop":
+                _continue_application_stop(
+                    str(instance.pk),
+                    int(fresh.runtime_operation_generation or 0),
+                )
         except Exception:
             logger.exception("Application reconciliation failed for %s", instance.pk)
 
