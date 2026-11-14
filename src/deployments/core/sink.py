@@ -170,9 +170,17 @@ class DBAndChannelEventSink:
 
     def _get_deploy(self) -> Deploy:
         if self._deploy_cache is None:
-            self._deploy_cache = Deploy.objects.select_related("service").get(
-                pk=self.deployment_id
-            )
+            # Keep this projection deliberately narrow. Selecting the full
+            # Deploy row can fail when a newer nullable lifecycle column is
+            # missing from a partially migrated database, which would then
+            # suppress every durable deployment event (including the repair
+            # diagnostics). The event pipeline only needs these identifiers.
+            self._deploy_cache = Deploy.objects.only(
+                "pk",
+                "service_id",
+                "revision_id",
+                "execution_task_id",
+            ).get(pk=self.deployment_id)
         return self._deploy_cache
 
 
