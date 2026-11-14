@@ -58,3 +58,15 @@ def test_dotenv_reader_strips_quotes_before_exporting_secret_values():
 
     assert "substr(value, 1, 1)" in script
     assert "substr(value, length(value), 1)" in script
+
+def test_single_node_fluent_bit_uses_host_loopback_instead_of_overlay_dns():
+    compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
+    collector = compose["services"]["log-collector"]
+    web = compose["services"]["web"]
+
+    assert collector["network_mode"] == "host"
+    assert "networks" not in collector
+    assert collector["environment"]["LOG_INGEST_HOST"] == "127.0.0.1"
+    assert collector["environment"]["LOG_INGEST_PORT"] == "8020"
+    assert "127.0.0.1:8020:8000" in web["ports"]
+
