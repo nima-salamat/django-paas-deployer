@@ -1616,9 +1616,9 @@ class DBDeployer:
             preexisting_runtime = observed_runtime is not None
             if preexisting_runtime:
                 observed_labels = dict(getattr(observed_runtime, "labels", {}) or {})
-                if (
-                    observed_labels.get("managed-by") != "django-paas-deployer"
-                    or str(observed_labels.get("passdeployer.service") or "") != str(service_id)
+                if not runtime.is_owned_service_labels(
+                    observed_labels,
+                    str(service_id),
                 ):
                     return DBDeployResult(
                         success=False,
@@ -1640,11 +1640,23 @@ class DBDeployer:
             )
 
         def recover_runtime(reason: str) -> dict[str, Any]:
+            operation = getattr(runtime, "_last_apply_operation", None)
+            operation = operation if isinstance(operation, dict) else {}
+            mutation_confirmed = bool(
+                runtime_mutated or operation.get("mutation_succeeded")
+            )
             details: dict[str, Any] = {
-                "runtime_recovery_attempted": True,
+                "runtime_recovery_attempted": mutation_confirmed,
                 "runtime_preexisting": preexisting_runtime,
+                "runtime_mutation_confirmed": mutation_confirmed,
                 "runtime_recovery_reason": reason,
             }
+            # Docker may return a manager deadline after an API call without
+            # confirming whether the mutation was committed. Never rollback
+            # or remove an unconfirmed resource; leave it for reconciliation.
+            if not mutation_confirmed:
+                details["runtime_recovery_skipped"] = True
+                return details
             try:
                 if preexisting_runtime:
                     rolled_back = bool(runtime.rollback_service(container_name, service_id=str(service_id)))
