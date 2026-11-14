@@ -627,6 +627,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             "net-demo",
             driver="overlay",
             attachable=True,
+            internal=False,
             labels={"managed-by": "django-paas-deployer"},
             check_duplicate=True,
         )
@@ -659,6 +660,7 @@ class SwarmRuntimeCompilerTests(unittest.TestCase):
             "net-demo",
             driver="overlay",
             attachable=True,
+            internal=False,
             labels={"managed-by": "django-paas-deployer"},
             check_duplicate=True,
         )
@@ -802,6 +804,10 @@ class SwarmRuntimeCleanupTests(unittest.TestCase):
             state="shutdown",
             desired_state="shutdown",
         )])
+        service.attrs["Spec"]["Labels"] = {
+            "managed-by": "django-paas-deployer",
+            "passdeployer.service": "svc-1",
+        }
         service.tasks = lambda filters=None: [task]
 
         container = MagicMock()
