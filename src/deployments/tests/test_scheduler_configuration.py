@@ -379,3 +379,15 @@ def test_deployment_event_outbox_dispatch_is_scheduled_only_after_durable_insert
     create.assert_called_once()
     on_commit.assert_called_once()
     assert on_commit.call_args.args[0].__name__ == "schedule_outbox_dispatch"
+
+def test_event_outbox_does_not_lock_nullable_deployment_outer_join():
+    source = (
+        ROOT / "src" / "deployments" / "common" / "event_outbox.py"
+    ).read_text(encoding="utf-8")
+    locked_query = source.split("row = (", 1)[1].split(
+        "if row is None:", 1
+    )[0]
+
+    assert ".select_for_update()" in locked_query
+    assert "select_related" not in locked_query
+
