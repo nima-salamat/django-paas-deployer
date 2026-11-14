@@ -10,6 +10,7 @@ class ApplicationStatus(models.TextChoices):
     RUNNING = "running", "Running"
     DEGRADED = "degraded", "Degraded"
     STOPPED = "stopped", "Stopped"
+    STOPPING = "stopping", "Stopping"
     FAILED = "failed", "Failed"
     CANCELLED = "cancelled", "Cancelled"
 
@@ -38,6 +39,11 @@ class ApplicationInstance(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     deployed_at = models.DateTimeField(null=True, blank=True)
     stage = models.CharField(max_length=64, blank=True, default="pending")
+    # Runtime operations are application-scoped and fenced independently from
+    # the original installation task so stale Celery callbacks cannot advance
+    # a later Start All / Stop All request.
+    runtime_operation = models.CharField(max_length=8, blank=True, default="")
+    runtime_operation_generation = models.PositiveIntegerField(default=0)
     execution_task_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
     started_at = models.DateTimeField(null=True, blank=True)
     execution_deadline = models.DateTimeField(null=True, blank=True)
