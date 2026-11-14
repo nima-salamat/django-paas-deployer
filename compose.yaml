@@ -207,7 +207,6 @@ services:
 
     networks:
       app-network: {}
-      proxy_net: {}
       log-ingest-network:
         aliases:
           - deploy-web
@@ -330,7 +329,6 @@ services:
 
     networks:
       - app-network
-      - proxy_net
   
 
   # ============================================================
@@ -395,7 +393,6 @@ services:
 
     networks:
       - app-network
-      - proxy_net
 
 
   # ============================================================
@@ -447,7 +444,6 @@ services:
       DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
     networks:
       - app-network
-      - proxy_net
 
 
   # ============================================================
@@ -519,7 +515,6 @@ services:
 
     networks:
       - app-network
-      - proxy_net
 
   xray:
     image: ${DOCKER_MIRROR:-docker.io}/teddysun/xray:latest
@@ -693,7 +688,6 @@ services:
         condition: service_started
     networks:
       - app-network
-      - proxy_net
 
 volumes:
   postgres_data:
@@ -715,12 +709,14 @@ networks:
     driver: bridge
 
   # ------------------------------------------------------------
-  # Network used by Traefik and dynamically-created deployments
+  # Shared reverse-proxy network. scripts/compose.sh creates it with the
+  # driver required by the selected runtime and keeps it across compose down.
+  # Only Traefik joins this network from the control-plane stack; app workloads
+  # join it directly when they need a public route.
   # ------------------------------------------------------------
   proxy_net:
     name: proxy_net
-    driver: overlay
-    attachable: true
+    external: true
 
   # Private internal network for local or per-node Fluent Bit agents.
   # scripts/compose.sh creates this network with the correct local driver.
