@@ -835,3 +835,211 @@ class SwarmRuntimeStopWaitTests(unittest.TestCase):
             self.assertFalse(
                 runtime.wait_service_group_stopped("service-1", timeout=0.0)
             )
+
+
+class SwarmLegacyOwnershipAndTaskCleanupTests(unittest.TestCase):
+    def test_legacy_passdeployer_labels_are_accepted_only_for_exact_service_owner(self):
+        self.assertTrue(
+            SwarmRuntime.is_owned_service_labels(
+                {"managed-by": "passdeployer", "service.id": "svc-1"},
+                "svc-1",
+            )
+        )
+        self.assertTrue(
+            SwarmRuntime.is_owned_service_labels(
+                {
+                    "managed-by": "django-paas-deployer",
+                    "passdeployer.service": "svc-1",
+                },
+                "svc-1",
+            )
+        )
+        self.assertFalse(
+            SwarmRuntime.is_owned_service_labels(
+                {"managed-by": "passdeployer", "service.id": "svc-other"},
+                "svc-1",
+            )
+        )
+        self.assertFalse(
+            SwarmRuntime.is_owned_service_labels(
+                {"managed-by": "unknown", "service.id": "svc-1"},
+                "svc-1",
+            )
+        )
+
+    def test_service_discovery_includes_legacy_exact_owner_label(self):
+        service = _FakeService(image="app:image", tasks=[])
+        service.attrs["Spec"]["Labels"] = {
+            "managed-by": "passdeployer",
+            "service.id": "svc-1",
+        }
+        client = MagicMock()
+        client.services.list.side_effect = [
+            [],
+            [service],
+            [],
+        ]
+
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+        runtime.client = client
+
+        self.assertEqual(runtime.service_names_for_service("svc-1"), ["demo"])
+        self.assertEqual(client.services.list.call_count, 3)
+
+    def test_cleanup_removes_only_old_exited_containers_for_shutdown_tasks(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        now = timezone.now()
+        old = (now - timedelta(hours=2)).isoformat()
+        recent = (now - timedelta(seconds=30)).isoformat()
+        tasks = [
+            {
+                "ID": "old-shutdown",
+                "DesiredState": "shutdown",
+                "UpdatedAt": old,
+                "Status": {
+                    "State": "shutdown",
+                    "ContainerStatus": {"ContainerID": "container-old"},
+                },
+            },
+            {
+                "ID": "recent-shutdown",
+                "DesiredState": "shutdown",
+                "UpdatedAt": recent,
+                "Status": {
+                    "State": "failed",
+                    "ContainerStatus": {"ContainerID": "container-recent"},
+                },
+            },
+            {
+                "ID": "failed-but-still-desired",
+                "DesiredState": "running",
+                "UpdatedAt": old,
+                "Status": {
+                    "State": "failed",
+                    "ContainerStatus": {"ContainerID": "container-restarting"},
+                },
+            },
+        ]
+        service = _FakeService(image="app:image", tasks=[])
+        service.attrs["Spec"]["Labels"] = {
+            "managed-by": "passdeployer",
+            "service.id": "svc-1",
+        }
+        service.tasks = lambda filters=None: tasks
+
+        old_container = MagicMock()
+        old_container.status = "exited"
+        client = MagicMock()
+        client.services = _FakeServices(service)
+        client.containers.get.return_value = old_container
+
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+        runtime.client = client
+        runtime.service_names_for_service = MagicMock(return_value=["demo"])
+
+        with patch("deployments.core.swarm.timezone.now", return_value=now):
+            result = runtime.cleanup_stopped_task_containers("svc-1")
+
+        self.assertEqual(result, {"seen": 3, "removed": 1, "skipped": 2, "failed": 0})
+        client.containers.get.assert_called_once_with("container-old")
+        old_container.remove.assert_called_once_with(force=True)
+
+
+class SwarmExternalImageTimeoutTests(unittest.TestCase):
+    def _runtime_with_existing_service(self, update_side_effect):
+        labels = {
+            "managed-by": "passdeployer",
+            "service.id": "svc-1",
+        }
+        service = MagicMock()
+        service.name = "db-demo"
+        service.attrs = {
+            "Spec": {
+                "Labels": dict(labels),
+                "TaskTemplate": {
+                    "ContainerSpec": {
+                        "Image": "mariadb:10",
+                        "Env": [],
+                    }
+                },
+            }
+        }
+        service.update.side_effect = update_side_effect(service, labels)
+
+        client = MagicMock()
+        client.services.get.return_value = service
+        runtime = SwarmRuntime.__new__(SwarmRuntime)
+        runtime.client = client
+        runtime.assert_active = MagicMock()
+        runtime.ensure_network = MagicMock()
+        runtime._apply_local_volume_pin = MagicMock(return_value=[])
+        runtime._create_kwargs = MagicMock(return_value={"name": "db-demo"})
+        runtime.inspect_service = MagicMock(
+            return_value=SimpleNamespace(
+                update_state=None,
+                service_image="mariadb:11",
+            )
+        )
+        runtime.wait_ready = MagicMock(return_value=SimpleNamespace(name="db-demo"))
+        runtime.cleanup_stopped_task_containers = MagicMock(
+            return_value={"seen": 0, "removed": 0, "skipped": 0, "failed": 0}
+        )
+        return runtime, service, labels
+
+    def test_manager_deadline_after_commit_does_not_send_duplicate_update(self):
+        def update_behavior(service, labels):
+            def update(**kwargs):
+                container_spec = service.attrs["Spec"]["TaskTemplate"]["ContainerSpec"]
+                container_spec["Image"] = kwargs["image"]
+                container_spec["Env"] = ["MARIADB_ROOT_PASSWORD=secret"]
+                service.attrs["Spec"]["Labels"] = dict(labels)
+                raise docker.errors.APIError(
+                    "rpc error: code = DeadlineExceeded desc = context deadline exceeded"
+                )
+            return update
+
+        runtime, service, labels = self._runtime_with_existing_service(update_behavior)
+        result = runtime.apply_external_image_service(
+            name="db-demo",
+            image_ref="mariadb:11",
+            environment={"MARIADB_ROOT_PASSWORD": "secret"},
+            labels=labels,
+        )
+
+        self.assertEqual(result.name, "db-demo")
+        service.update.assert_called_once()
+        self.assertTrue(runtime._last_apply_operation["mutation_succeeded"])
+        runtime.wait_ready.assert_called_once()
+        runtime.cleanup_stopped_task_containers.assert_called_once_with("svc-1")
+
+    def test_manager_deadline_before_commit_retries_once_after_rereading(self):
+        def update_behavior(service, labels):
+            calls = {"count": 0}
+
+            def update(**kwargs):
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    raise docker.errors.APIError(
+                        "rpc error: code = DeadlineExceeded desc = context deadline exceeded"
+                    )
+                container_spec = service.attrs["Spec"]["TaskTemplate"]["ContainerSpec"]
+                container_spec["Image"] = kwargs["image"]
+                container_spec["Env"] = ["MARIADB_ROOT_PASSWORD=secret"]
+                service.attrs["Spec"]["Labels"] = dict(labels)
+            return update
+
+        runtime, service, labels = self._runtime_with_existing_service(update_behavior)
+        with patch("deployments.core.swarm.time.sleep"):
+            result = runtime.apply_external_image_service(
+                name="db-demo",
+                image_ref="mariadb:11",
+                environment={"MARIADB_ROOT_PASSWORD": "secret"},
+                labels=labels,
+            )
+
+        self.assertEqual(result.name, "db-demo")
+        self.assertEqual(service.update.call_count, 2)
+        self.assertTrue(runtime._last_apply_operation["mutation_succeeded"])
+        runtime.client.services.get.assert_called()
