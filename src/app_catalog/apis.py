@@ -347,6 +347,30 @@ class ApplicationInstanceStartAPIView(CatalogPermissionMixin, APIView):
                         status=status.HTTP_409_CONFLICT,
                     )
 
+                if instance.status == ApplicationStatus.STOPPED:
+                    unconfirmed = [
+                        key
+                        for key, binding in bindings.items()
+                        if (
+                            str(binding.service.status or "").lower()
+                            != str(SERVICE_STATUS_CHOICES.STOPPED).lower()
+                            or str(binding.service.desired_state or "").lower() != "stopped"
+                        )
+                    ]
+                    if unconfirmed:
+                        return Response(
+                            {
+                                "detail": (
+                                    "The parent is marked stopped, but these child services are not confirmed stopped: "
+                                    + ", ".join(sorted(unconfirmed))
+                                    + ". Run Stop All to reconcile the complete stack first."
+                                ),
+                                "code": "application_stop_before_restart",
+                                "service_keys": sorted(unconfirmed),
+                            },
+                            status=status.HTTP_409_CONFLICT,
+                        )
+
                 to_start = []
                 for key in plan.topological_order():
                     binding = bindings[key]
