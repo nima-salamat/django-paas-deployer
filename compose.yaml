@@ -575,16 +575,18 @@ services:
       LOG_INGEST_SHARED_TOKEN: ${LOG_INGEST_SHARED_TOKEN:-}
       LOG_FORWARD_SOCKET_PATH: ${LOG_FORWARD_SOCKET_PATH:-/run/passdeployer-logs/forward.sock}
       LOG_FORWARD_SOCKET_CONTAINER_PATH: /run/passdeployer-logs/forward.sock
-      LOG_INGEST_HOST: ${LOG_INGEST_HOST:-deploy-web}
-      LOG_INGEST_PORT: ${LOG_INGEST_PORT:-8000}
+      # The single-node collector uses host networking and the loopback-only
+      # published Django endpoint. This avoids overlay DNS/VXLAN for local logs.
+      LOG_INGEST_HOST: 127.0.0.1
+      LOG_INGEST_PORT: "8020"
       LOG_INGEST_TLS: ${LOG_INGEST_TLS:-off}
       LOG_COLLECTOR_DISK_LIMIT: ${LOG_COLLECTOR_DISK_LIMIT:-512M}
     depends_on:
       web:
         condition: service_started
-    networks:
-      - app-network
-      - log-ingest-network
+    # The host publishes Django on 127.0.0.1:8020. Sharing the host network
+    # namespace makes the local log path independent of Docker overlay DNS/VXLAN.
+    network_mode: host
     logging:
       driver: local
       options:
