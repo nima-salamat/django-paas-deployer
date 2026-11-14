@@ -38,9 +38,10 @@ def sync_application_status_for_service(service_id: str | int) -> str | None:
 
         # Installation orchestration owns PENDING/DEPLOYING; structural or
         # terminal failures and user cancellation must not be overwritten.
-        if instance.status in {
+        if instance.runtime_operation or instance.status in {
             ApplicationStatus.PENDING,
             ApplicationStatus.DEPLOYING,
+            ApplicationStatus.STOPPING,
             ApplicationStatus.FAILED,
             ApplicationStatus.CANCELLED,
         }:
