@@ -311,3 +311,43 @@ class ReadyAppRuntimeSupervisorTests(TestCase):
         self.assertEqual(result["status"], "stopped")
         self.assertEqual(instance.status, ApplicationStatus.STOPPED)
         self.assertEqual(instance.stage, "application_stopped")
+
+
+    def test_supervisor_defers_database_schema_errors_without_marking_app_corrupt(self):
+        from django.db import ProgrammingError
+
+        instance, _service, _deploy, _network = self._application()
+        executor = ApplicationStackExecutor(str(instance.pk))
+        with patch.object(
+            executor,
+            "_load",
+            side_effect=ProgrammingError(
+                'column deploy_deploy.expected_lifecycle_generation does not exist'
+            ),
+        ):
+            result = executor.supervise_runtime()
+
+        instance.refresh_from_db()
+        self.assertEqual(result["status"], "database_unavailable")
+        self.assertEqual(instance.status, ApplicationStatus.RUNNING)
+        self.assertEqual(instance.stage, "application_ready")
+        self.assertEqual(instance.error_code, "")
+
+    def test_previously_corrupted_ready_app_recovers_after_schema_is_available(self):
+        instance, _service, _deploy, _network = self._application()
+        instance.status = ApplicationStatus.FAILED
+        instance.stage = "state_corrupted"
+        instance.error_code = "APPLICATION_STATE_CORRUPTED"
+        instance.error_message = "Previous deployment could not read the schema."
+        instance.save(update_fields=[
+            "status", "stage", "error_code", "error_message", "updated_at",
+        ])
+
+        result = ApplicationStackExecutor(str(instance.pk)).supervise_runtime()
+
+        instance.refresh_from_db()
+        self.assertEqual(result["status"], "healthy")
+        self.assertEqual(instance.status, ApplicationStatus.RUNNING)
+        self.assertEqual(instance.stage, "application_ready")
+        self.assertEqual(instance.error_code, "")
+        self.assertEqual(instance.error_message, "")
